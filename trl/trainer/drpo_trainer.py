@@ -140,7 +140,6 @@ class DRPOTrainer(Trainer):
             train_dataset: Optional[Dataset] = None,
             eval_dataset: Optional[Dataset] = None,
             processing_class: Optional[Union[PreTrainedTokenizerBase]] = None,
-            preference_processing_class: Optional[PreTrainedTokenizerBase] = None,
             compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
             callbacks: Optional[List[TrainerCallback]] = None,
             optimizers: Optional[Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]] = None
@@ -154,8 +153,6 @@ class DRPOTrainer(Trainer):
         if preference_model is None:
             raise ValueError("The preference model cannot be None.")
         self.preference_model = preference_model
-
-        self.preference_processing_class = preference_processing_class
 
         if args.disable_dropout:
             disable_dropout_in_model(model)
@@ -374,6 +371,7 @@ class DRPOTrainer(Trainer):
     
     def training_step(self, model:nn.Modules, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
         model.train()
+        print(inputs)
         batch_size = inputs["prompt_ids"].size(0)
 
         prompt_ids = inputs["prompt_ids"]
@@ -408,37 +406,38 @@ class DRPOTrainer(Trainer):
         with torch.inference_mode():
             context_length = prompt_ids.size(1)
 
-            try:
-                prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
-                prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1).repeat(self.args.num_astar, 1)
-                
-                # g(y*, y', x)
-                _, preference_score_star, _= get_preference_score(
-                    self.preference_model, 
-                    prompt_astar_ids, 
-                    prompt_a2_ids, 
-                    self.processing_class.pad_token_id, 
-                    context_length
-                )
-                
-                if self.args.missing_eos_penalty is not None:
-                    preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
+            prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
+            prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
 
-            except:
-                raise NotImplementedError("Different processing classes are not supported yet.")
+            prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+            prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
+            prompt_a2_repeated = prompt_a2 * self.args.num_astar
+            assert(len(prompt_astar) == len(prompt_a2_repeated))
+            
+            # g(y*, y', x)
+            preference_score_star= get_preference_score(
+                self.preference_model, 
+                prompt_astar, 
+                prompt_a2_repeated
+            )
+            
+            if self.args.missing_eos_penalty is not None:
+                preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
 
             
             if not self.precompute_preference_score:
                 # g(y, y', x)            
                 prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
                 prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
+
+                prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
+                assert(len(prompt_a1) == len(prompt_a2))
+
                 # TODO: write get_preference_score function
-                _, preference_score, _ = get_preference_score(
+                preference_score = get_preference_score(
                     self.preference_model, 
-                    prompt_a1_ids, 
-                    prompt_a2_ids, 
-                    self.processing_class.pad_token_id, 
-                    context_length
+                    prompt_a1, 
+                    prompt_a2
                 )
             else:
                 preference_score = inputs["preference_score"]
@@ -459,9 +458,10 @@ class DRPOTrainer(Trainer):
         losses2 = - logprobs_star_sum * preference_score_star
 
         # Compute the penalty term of kl divergence
-        kl_onpolicy_part = ((logprobs_star - ref_logprobs_star)*astar_attention_mask).sum(-1) 
+        # kl_onpolicy_part = ((logprobs_star - ref_logprobs_star)*astar_attention_mask).sum(-1) 
         kl_offline_part = ((logprobs - ref_logprobs)*a1_attention_mask).sum(-1)
-        mean_kl = torch.cat((kl_onpolicy_part, kl_offline_part), dim=0).mean()
+        # mean_kl = torch.cat((kl_onpolicy_part, kl_offline_part), dim=0).mean()
+        mean_kl = kl_offline_part.mean()
 
         # Compute the loss
         loss = (losses1 + losses2).mean() - self.beta * mean_kl
@@ -540,7 +540,6 @@ class DRPOTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name="Online DPO",
             trainer_citation=citation,
-            paper_title="???",
             paper_id="not available",
         )
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

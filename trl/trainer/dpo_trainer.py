@@ -46,7 +46,7 @@ from transformers import (
     is_comet_available,
     is_wandb_available,
 )
-from transformers.data.data_collator import DataCollatorMixin
+from transformers.data.data_collator import DataCollatorMixin, DataCollator
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
