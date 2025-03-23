@@ -34,6 +34,8 @@ _import_structure = {
     "ddpo_config": ["DDPOConfig"],
     "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
+    "drpo_trainer": ["DRPOTrainer", "DataCollatorDRPO"],
+    "drpo_config": ["DRPOConfig"],
     "gkd_config": ["GKDConfig"],
     "gkd_trainer": ["GKDTrainer"],
     "grpo_config": ["GRPOConfig"],

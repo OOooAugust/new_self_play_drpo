@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, pipeline
 import torch.nn.functional as F
 from transformers import AutoTokenizer     
 import os
@@ -118,7 +118,7 @@ def get_reward_model(base_causal_model, base_llm_model, value_head_dim: int, add
     return CustomRewardModel
 
 class GPMPipeline:
-    def __init__(self, model_name_or_path, device=torch.device("cuda:0"), is_general_preference: bool=True, bf16: bool=True, truncation: bool=True, max_length: int=4096, padding: bool=True, tau: float=0.1):
+    def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), is_general_preference: bool=True, bf16: bool=True, truncation: bool=True, max_length: int=4096, padding: bool=True, tau: float=0.1):
         self.device = device
         self.is_general_preference = is_general_preference
 
@@ -128,12 +128,13 @@ class GPMPipeline:
         self.tau = tau
         
         config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-        config._attn_implementation = "flash_attention_2" 
+        config._attn_implementation = "eager" 
         base_class = AutoModel._model_mapping[type(config)]
         base_causal_class = AutoModelForCausalLM._model_mapping.get(type(config), None)
 
         try:
             dir_path = snapshot_download(repo_id=model_name_or_path)
+            # print(dir_path)
         except Exception as e:
             dir_path = model_name_or_path
         combined_weights = {}
@@ -142,6 +143,8 @@ class GPMPipeline:
                 file_path = os.path.join(dir_path, filename)
                 weights = load_file(file_path)
                 combined_weights.update(weights)
+
+        # print(combined_weights.keys())
 
         if "value_head.weight" in combined_weights:
             self.value_head_dim = combined_weights["value_head.weight"].shape[0]
@@ -158,6 +161,8 @@ class GPMPipeline:
             config=config,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16 if bf16 else "auto",
+            device_map="auto",
+            attn_implementation="eager"
         )
         
         # configure tokenizer
@@ -169,13 +174,22 @@ class GPMPipeline:
         self.model.eval()
 
     def __call__(self, samples: List[str], return_prompt=False):
+        input_texts = samples
+
+        print("++++++++++++++++++++++\n length of inputs of preference model")
+        print(len(input_texts))
         inputs = self.tokenizer(
-            samples,
+            input_texts,
             truncation=True,
             max_length=self.max_length,
             padding=True,
             return_tensors="pt",
-        ).to(self.device)
+        )
+        print("end of tokenizer")
+        
+
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
 
         inputs["input_ids"][:, -1] = self.tokenizer.eos_token_id
         inputs["attention_mask"][:, -1] = 1
@@ -183,33 +197,51 @@ class GPMPipeline:
         with torch.no_grad():
             rewards, _ = self.model.custom_forward(**inputs, return_output=return_prompt)
 
-        return rewards   
-
-rm = GPMPipeline("model_path")
-
-
-def get_preference_score(preference_model, prompt_a1, prompt_a2):
+        return rewards
     
-    a_1_reward = preference_model(prompt_a1)
-    a_2_reward = preference_model(prompt_a2)
-    if preference_model.value_head_dim == 2:
-        result = a_1_reward[:, 0] * a_2_reward[:, 1] - a_1_reward[:, 1] * a_2_reward[:, 0]
+    def to(self, device):
+        self.device = device
+        self.model.to(device)
+        return self
+
+
+
+
+def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True):
+    # print(a_1_iuput)
+    # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
+    a_1_reward = preference_model(a_1_iuput)
+    a_2_reward = preference_model(a_2_input)
+    if is_bt_model:
+        result = a_1_reward - a_2_reward
     else:
-        R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a_1_reward.device, dtype=a_1_reward.dtype)
-        for i in range(0, preference_model.value_head_dim, 2):
-            R_matrix[i, i+1] = -1 
-            R_matrix[i+1, i] = 1   
-        if a_1_reward.device == a_2_reward.device == R_matrix.device:
-            transformed_a_1 = torch.matmul(a_1_reward, R_matrix.T)
-            result = torch.bmm(transformed_a_1.view(a_1_reward.shape[0], 1, preference_model.value_head_dim), a_2_reward.view(a_2_reward.shape[0], value_head_dim, 1))
-            result = result.view(a_1_reward.shape[0])  
+        if preference_model.value_head_dim == 2:
+            result = a_1_reward[:, 0] * a_2_reward[:, 1] - a_1_reward[:, 1] * a_2_reward[:, 0]
+        else:
+            R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a_1_reward.device, dtype=a_1_reward.dtype)
+            for i in range(0, preference_model.value_head_dim, 2):
+                R_matrix[i, i+1] = -1 
+                R_matrix[i+1, i] = 1   
+            if a_1_reward.device == a_2_reward.device == R_matrix.device:
+                transformed_a_1 = torch.matmul(a_1_reward, R_matrix.T)
+                result = torch.bmm(transformed_a_1.view(a_1_reward.shape[0], 1, preference_model.value_head_dim), a_2_reward.view(a_2_reward.shape[0], preference_model.value_head_dim, 1))
+                result = result.view(a_1_reward.shape[0])  
     p = F.sigmoid(result)
     return p
-   
 
-""" 
-感觉可以类似这样调用：
-在trainer中，self.preference_model = GPMPipeline("model_path")
-或者在trainer中，self.preference_model = rm （rm直接在训练script里面实例化然后传进去）
-然后用get_preference(a_1_iuput, a_2_input)来计算preference，两个input都是文字(apply chat template之后的)
-"""   
+
+class BTPipeline:
+    def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True):
+        self.pipeline = pipeline("sentiment-analysis", model=model_name_or_path, device=device)
+        self.truncation=truncation
+        self.padding=padding
+
+    def __call__(self, input_text: List[str]):
+        batch_size = len(input_text)
+        sentiment_results = self.pipeline(input_text, batch_size=batch_size, truncation=self.truncation, padding=self.padding)
+        return torch.tensor([res["score"] if res["label"] == "POSITIVE" else 1 - res["score"] for res in sentiment_results])
+    
+    def to(self, device):
+        self.device = device
+        self.pipeline.model.to(device)
+        return self 

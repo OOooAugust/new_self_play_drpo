@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union, Callable
 
 from transformers import TrainingArguments
 
@@ -105,19 +105,66 @@ class DRPOConfig(TrainingArguments):
 
     ds_gather_for_generation: bool = field(
         default=True,
-        meatadata={
+        metadata={
             "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,"
             "improving generation speed. However, disabling this option allows training models that exceed the VRAM capacity of a single GPU,"
             "albeit at the cost of slower generation."
         },
     )
 
-    num_star: int = field(
-        defaul=1,
+    num_astar: int = field(
+        default=1,
         metadata={
             "help": "Number of newly generated completions to compare with the reference model."
         }
     )
+    
+    tools: Optional[list[Union[dict, Callable]]] = field(
+        default=None,
+        metadata={
+            "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
+            "not support function calling, this argument will have no effect."
+        },
+    )
+
+    max_prompt_length: Optional[int] = field(
+        default=512,
+        metadata={"help": "Maximum length of the prompt."},
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the completion."},
+    )
+    max_length: Optional[int] = field(
+        default=1024,
+        metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
+    )
+
+    precompute_preference_score: bool = field(
+        default=False,
+        metadata={"help": "Whether to precompute the preference score for the dataset."},
+    )
+
+    logging_steps: int = field(
+        default=10,
+        metadata={"help": "Number of steps to log the training loss."},
+    )
+
+    num_train_epochs: int = field(
+        default=2,
+        metadata={"help": "Number of training epochs."},
+    )
+
+    is_bt_model: bool = field(
+        default=True,
+        metadata={"help": "Whether the preference model uses BT framework."},
+    )
+
+    preference_model_id: Optional[str] = field(
+        default="siebert/sentiment-roberta-large-english",
+        metadata={"help": "Model ID of the preference model."},
+    )
+
 
     def __post_init__(self):
         super().__post_init__()

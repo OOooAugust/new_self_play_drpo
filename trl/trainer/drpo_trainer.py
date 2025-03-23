@@ -6,7 +6,8 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any, Union, Optional, Callable, List, Tuple
-from functools import wraps 
+from functools import wraps
+from packaging import version
 
 import transformers
 import torch.utils.data
@@ -30,21 +31,21 @@ from transformers.trainer_utils import seed_worker
 from transformers.data.data_collator import DataCollatorMixin
 
 from datasets import Dataset
+from dataclasses import dataclass
 
-
-from ..data_utils import maybe_apply_chat_template
-from .utils import unwrap_model_for_generation, pad, truncate_right
-
+from .utils import pad, truncate_right
+from ..models.utils import unwrap_model_for_generation
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
+from accelerate import PartialState
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
-from .online_dpo_config import DRPOConfig
+from .drpo_config import DRPOConfig
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
     DPODataCollatorWithPadding,
@@ -52,8 +53,6 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
-    get_reward,
-    prepare_deepspeed,
     truncate_right,
 )
 from .drpo_utils import get_preference_score # TODO: write get_preference_score function
@@ -67,12 +66,13 @@ if is_wandb_available():
 
 logger = logging.get_logger(__name__)
 
+@dataclass
 class DataCollatorDRPO(DataCollatorMixin):
     pad_token_id: int
     return_tensors: str = 'pt'
 
     def torch_call(self, examples: list[Union[list[int], dict[str,Any], Any]])-> dict[str, Any]:
-
+        # print(examples)
         prompt_ids = [torch.tensor(example["prompt_ids"]) for example in examples]
         prompt_attention_mask = [torch.ones_like(id) for id in prompt_ids]
         a1_ids = [torch.tensor(example["a1_ids"]) for example in examples]
@@ -142,7 +142,7 @@ class DRPOTrainer(Trainer):
             processing_class: Optional[Union[PreTrainedTokenizerBase]] = None,
             compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
             callbacks: Optional[List[TrainerCallback]] = None,
-            optimizers: Optional[Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]] = None
+            optimizers: Optional[Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]] = (None, None)
         ) -> None:
         
         if ref_model is model:
@@ -160,9 +160,12 @@ class DRPOTrainer(Trainer):
                 disable_dropout_in_model(self.ref_model)
 
         if data_collator is None:
+            if processing_class is None:
+                raise ValueError("If data_collator is None, processing_class must be provided.")
             data_collator = DataCollatorDRPO(pad_token_id=processing_class.pad_token_id)
 
         self.max_length = args.max_length
+        self.precompute_preference_score = args.precompute_preference_score
 
         self.stats = {
             "logps/a1": [],
@@ -184,6 +187,27 @@ class DRPOTrainer(Trainer):
         # that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
+        # Dataset preparation
+        train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+
+        self.generation_config = GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=50,
+            top_p=1.0,
+            do_sample=True,
+            use_cache=False if args.gradient_checkpointing else True,
+        )
+
+
         super().__init__(
             model=model,
             args=args,
@@ -202,7 +226,7 @@ class DRPOTrainer(Trainer):
 
         self._beta = args.beta
         self.ref_model = self.ref_model.to(self.accelerator.device)
-        self.preference_model = self.preference_model.to(self.accelerator.device)
+        self.preference_model.to(self.accelerator.device)
 
     @property
     def beta(self):
@@ -214,28 +238,28 @@ class DRPOTrainer(Trainer):
 
     @staticmethod
     def tokenize_row(feature, 
-                     tokenizer: PreTrainedTokenizerBase, 
+                     processing_class: PreTrainedTokenizerBase, 
                      max_prompt_length: Union[int, None] = None, 
                      max_completion_length: Union[int, None] = None, 
-                     add_special_token: bool = True) -> dict[str, Any]:
+                     add_special_tokens: bool = True) -> dict[str, Any]:
         """Tokenize a row of data."""
         # FIXME: the logic of whether to add special tokens is not clear
         # FIXME: whether to add attention mask is not clear
         
-        prompt_ids = tokenizer(feature["prompt"], add_special_tokens=False)["input_ids"]
-        a1_ids = tokenizer(feature["a1"], add_special_tokens=False)["input_ids"]
-        a2_ids = tokenizer(feature["a2"], add_special_tokens=False)["input_ids"]
+        prompt_ids = processing_class(feature["prompt"], add_special_tokens=False)["input_ids"]
+        a1_ids = processing_class(feature["a1"], add_special_tokens=False)["input_ids"]
+        a2_ids = processing_class(feature["a2"], add_special_tokens=False)["input_ids"]
 
         # add speical tokens
-        if add_special_token:
-            if tokenizer.bos_token_id is not None:
-                prompt_ids = [tokenizer.bos_token_id] + prompt_ids
-            if tokenizer.eos_token_id is not None:
-                prompt_ids = prompt_ids + [tokenizer.eos_token_id]
+        if add_special_tokens:
+            if processing_class.bos_token_id is not None:
+                prompt_ids = [processing_class.bos_token_id] + prompt_ids
+            if processing_class.eos_token_id is not None:
+                prompt_ids = prompt_ids + [processing_class.eos_token_id]
         
         # 2 completions must add eos token to avoid non-stopping generation
-        a1_ids = a1_ids + [tokenizer.eos_token_id]
-        a2_ids = a2_ids + [tokenizer.eos_token_id]
+        a1_ids = a1_ids + [processing_class.eos_token_id]
+        a2_ids = a2_ids + [processing_class.eos_token_id]
 
         # truncation
         if max_prompt_length is not None:
@@ -249,6 +273,65 @@ class DRPOTrainer(Trainer):
             "a1_ids": a1_ids,
             "a2_ids": a2_ids
         }
+    
+    def _prepare_dataset(self, dataset: Union[Dataset, IterableDataset], processing_class: Union[PreTrainedTokenizerBase],
+                         args: DRPOConfig, dataset_name: str,) -> Union[Dataset, IterableDataset]:
+        map_kwargs = {"writer_batch_size": 10}
+        if isinstance(dataset, Dataset):
+            map_kwargs["num_proc"] = args.dataset_num_proc
+        
+        with PartialState().local_main_process_first():
+            # Extract prompt if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Extracting prompt in {dataset_name} dataset"
+            dataset = dataset.map(maybe_extract_prompt, **map_kwargs)
+
+            # Apply the chat template if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+            dataset = dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class, "tools": args.tools}, **map_kwargs
+            )
+
+            # Tokenize the dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+
+            dataset = dataset.map(
+                self.tokenize_row,
+                remove_columns=["prompt","a1","a2"],
+                fn_kwargs={
+                    "processing_class": processing_class,
+                    "max_prompt_length": args.max_prompt_length,
+                    "max_completion_length": args.max_completion_length,
+                    # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
+                    "add_special_tokens": False,
+                },
+                **map_kwargs,
+            )
+
+        return dataset
+    
+    
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs.
+        # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+        # Instead, we set them to the columns expected by `DataCollatorForPreference`, hence the override.
+        if self._signature_columns is None:
+            self._signature_columns = [
+                "prompt_ids",
+                "a1_ids",
+                "a2_ids",
+                "prompt_attention_mask",
+                "a1_attention_mask",
+                "a2_attention_mask",
+                "rank",
+            ]
+
+
+
+
     
     @wraps(Trainer.get_train_dataloader)
     def get_train_dataloader(self) -> DataLoader:
@@ -344,34 +427,40 @@ class DRPOTrainer(Trainer):
 
         completion_ids = output[:, prompt_ids.shape[1]:]
         completion_ids, completion_attention_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+        # print("_generate: completions_ids.shape ", completion_ids.shape)
 
         return prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask
     
     def _forward(self, model, prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask):
         # Get the number of tokens to truncate from prompt
         num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
+        # print("_forward, num_tokens_to_truncate: ",num_tokens_to_truncate)
+        # print("_forward, prompt_ids.shape: ",prompt_ids.shape)
+        # print("_forward, completion_ids.shape: ",completion_ids.shape)
 
         # Truncate left to avoid oom
         prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
         prompt_attention_mask = prompt_attention_mask[:, num_tokens_to_truncate:]
+        # print("_forward, prompt_ids.shape: ",prompt_ids.shape)
 
         # Concat the prompt and completion
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
+        # print("_forward, prompt_completion_ids.shape: ",prompt_completion_ids.shape)
 
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+        # print("_forward, output.logits.shape: ",output.logits.shape)
 
         # There is 1 offset, because the model predict the next token
-        logits = output.logits[:, prompt_ids.size(1) - 1 : -1]
-
+        logits = output.logits[:, max(0, prompt_ids.size(1) - 1) : -1]
+        # print("_forward, logits.shape: ",logits.shape)
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         return logprobs
     
-    def training_step(self, model:nn.Modules, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
+    def training_step(self, model:nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
         model.train()
-        print(inputs)
         batch_size = inputs["prompt_ids"].size(0)
 
         prompt_ids = inputs["prompt_ids"]
@@ -391,12 +480,13 @@ class DRPOTrainer(Trainer):
 
         # log pi(y*|x) shape(num_astar*batch_size, 1)
         logprobs_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
-        
+
+
         with torch.no_grad():
             if self.ref_model is not None:
                 # log pi_ref(y|x)
                 ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask)
-                ref_logprobs_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+                # ref_logprobs_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
             else:
                 raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
 
@@ -413,12 +503,14 @@ class DRPOTrainer(Trainer):
             prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
             prompt_a2_repeated = prompt_a2 * self.args.num_astar
             assert(len(prompt_astar) == len(prompt_a2_repeated))
+            # print("prompt_astar: ", prompt_astar)
             
             # g(y*, y', x)
             preference_score_star= get_preference_score(
                 self.preference_model, 
                 prompt_astar, 
-                prompt_a2_repeated
+                prompt_a2_repeated,
+                is_bt_model = self.args.is_bt_model
             )
             
             if self.args.missing_eos_penalty is not None:
@@ -432,12 +524,14 @@ class DRPOTrainer(Trainer):
 
                 prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
                 assert(len(prompt_a1) == len(prompt_a2))
+                
 
                 # TODO: write get_preference_score function
                 preference_score = get_preference_score(
                     self.preference_model, 
                     prompt_a1, 
-                    prompt_a2
+                    prompt_a2,
+                    is_bt_model = self.args.is_bt_model
                 )
             else:
                 preference_score = inputs["preference_score"]
@@ -496,6 +590,89 @@ class DRPOTrainer(Trainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
     
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+            logs: dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            logs["learning_rate"] = self._get_learning_rate()
+
+            # Add our metrics
+            for key, val in self.stats.items():
+                logs[key] = sum(val) / len(val)
+            self.stats = {key: [] for key in self.stats}  # reset stats
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+                self.log(logs, start_time)
+            else:  # transformers<=4.46
+                self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self._evaluate(trial, ignore_keys_for_eval)
+            is_new_best_metric = self._determine_best_metric(metrics=metrics, trial=trial)
+
+            if self.args.save_strategy == "best":
+                self.control.should_save = is_new_best_metric
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+    # Copy-pasted from transformers.Trainer to maintain compatibility with earlier versions.
+    # This can be removed once the minimum transformers version is updated to 4.47.
+    # Refer to https://github.com/huggingface/trl/pull/2288 for more details.
+    def _determine_best_metric(self, metrics, trial):
+        """
+        Determine if the model should be saved based on the evaluation metrics.
+        If args.metric_for_best_model is not set, the loss is used.
+        Returns:
+            bool: True if a new best metric was found, else False
+        """
+        is_new_best_metric = False
+
+        if self.args.metric_for_best_model is not None:
+            metric_to_check = self.args.metric_for_best_model
+
+            if not metric_to_check.startswith("eval_"):
+                metric_to_check = f"eval_{metric_to_check}"
+
+            try:
+                metric_value = metrics[metric_to_check]
+            except KeyError as exc:
+                raise KeyError(
+                    f"The `metric_for_best_model` training argument is set to '{metric_to_check}', which is not found in the evaluation metrics. "
+                    f"The available evaluation metrics are: {list(metrics.keys())}. Consider changing the `metric_for_best_model` via the TrainingArguments."
+                ) from exc
+
+            operator = np.greater if self.args.greater_is_better else np.less
+
+            if self.state.best_metric is None:
+                self.state.best_metric = float("-inf") if self.args.greater_is_better else float("inf")
+
+            if operator(metric_value, self.state.best_metric):
+                run_dir = self._get_output_dir(trial=trial)
+                checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+                output_dir = os.path.join(run_dir, checkpoint_folder)
+                self.state.best_metric = metric_value
+                self.state.best_model_checkpoint = output_dir
+
+                is_new_best_metric = True
+
+        return is_new_best_metric
+    
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -538,7 +715,7 @@ class DRPOTrainer(Trainer):
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
-            trainer_name="Online DPO",
+            trainer_name="drpo",
             trainer_citation=citation,
             paper_id="not available",
         )
