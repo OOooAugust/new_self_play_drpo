@@ -167,17 +167,6 @@ class DRPOTrainer(Trainer):
         self.max_length = args.max_length
         self.precompute_preference_score = args.precompute_preference_score
 
-        self.stats = {
-            "logps/a1": [],
-            "logps/a*": [],
-            "ps/a1": [],
-            "ps/a*": [],
-            "beta": [],
-            "objective/kl": [],
-            "objective/loss1": [],
-            "objective/loss2": [],
-            "objective/loss": []
-        }
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
@@ -227,6 +216,24 @@ class DRPOTrainer(Trainer):
         self._beta = args.beta
         self.ref_model = self.ref_model.to(self.accelerator.device)
         self.preference_model.to(self.accelerator.device)
+
+        self.stats = {
+            "logps/a1": [],
+            "reflogps/a1": [],
+            "logps/a*": [],
+            "ps/a1": [],
+            "ps/a*": [],
+            "beta": [],
+            "objective/kl": [],
+            "objective/loss1": [],
+            "objective/loss2": [],
+            "objective/loss": [],
+            "is_ratio": [],
+        }
+        
+        if args.ratio_processing == "clip":
+            self.stats["objective/loss1_clipped"] = []
+
 
     @property
     def beta(self):
@@ -536,11 +543,6 @@ class DRPOTrainer(Trainer):
             else:
                 preference_score = inputs["preference_score"]
 
-        # Compute the loss part one
-        logprobs_sum = (logprobs * a1_attention_mask).sum(1)
-        ref_logprobs_sum = (ref_logprobs * a1_attention_mask).sum(1)
-        losses1 = - torch.exp(logprobs_sum - ref_logprobs_sum)*(rank - preference_score)
-
         # Compute the loss part two
         assert logprobs_star.size(0) == batch_size * self.args.num_astar
         logprobs_star = logprobs_star.view(self.args.num_astar, batch_size, -1)
@@ -557,12 +559,38 @@ class DRPOTrainer(Trainer):
         # mean_kl = torch.cat((kl_onpolicy_part, kl_offline_part), dim=0).mean()
         mean_kl = kl_offline_part.mean()
 
-        # Compute the loss
-        loss = (losses1 + losses2).mean() - self.beta * mean_kl
+        # Compute the loss part one
+        logprobs_sum = (logprobs * a1_attention_mask).sum(1)
+        ref_logprobs_sum = (ref_logprobs * a1_attention_mask).sum(1)
+        print("pi, ref:",logprobs_sum, ref_logprobs_sum)
+        
+        
+        if self.args.ratio_processing == "clip":
+            ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
+            losses1 = - ratio*(rank - preference_score)
+            losses1_clipped =  - torch.clamp(ratio, max = self.args.clipbound)*(rank - preference_score)
+            losses1_max = torch.max(losses1, losses1_clipped)
+            loss = (losses1_max + losses2).mean()
+        
+        elif self.args.ratio_processing == "self_normalize":
+            print(torch.exp(logprobs_sum).mean())
+            print(torch.exp(ref_logprobs_sum).mean())
+            ratio_nominator = torch.exp(logprobs_sum) / torch.exp(logprobs_sum).mean()
+            ratio_denominator = torch.exp(ref_logprobs_sum) / torch.exp(ref_logprobs_sum).mean()
+            print("ratio pi/ref:", ratio_nominator, ratio_denominator)
+            ratio = ratio_nominator / ratio_denominator
+            losses1 = - ratio * (rank - preference_score)
+            loss = (losses1 + losses2).mean() - self.beta * mean_kl
+
+        else:
+            ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
+            losses1 = - ratio * (rank - preference_score)
+            loss = (losses1 + losses2).mean() - self.beta * mean_kl
 
         # log everything
         self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logprobs_sum).mean().item())
         self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logprobs_star_sum).mean().item())
+        self.stats['reflogps/a1'].append(self.accelerator.gather_for_metrics(ref_logprobs_sum).mean().item())
         self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
         self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)
@@ -570,6 +598,12 @@ class DRPOTrainer(Trainer):
         self.stats['objective/loss1'].append(self.accelerator.gather_for_metrics(losses1.mean()).mean().item())
         self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(losses2.mean()).mean().item())
         self.stats['objective/loss'].append(self.accelerator.gather_for_metrics(loss).mean().item())
+        self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean()).mean().item())
+
+        if self.args.ratio_processing == "clip":
+            self.stats['objective/loss1_clipped'].append(self.accelerator.gather_for_metrics(losses1_max.mean()).mean().item())
+
+        
 
         if (
             self.args.torch_empty_cache_steps is not None

@@ -64,14 +64,15 @@ class TestDataLoader(unittest.TestCase):
             training_args = DRPOConfig(
                 output_dir=tmp_dir,
                 max_length=256,
-                temperature=1e-7,
                 beta=0.1,
                 dataset_num_proc=1,
-                num_astar = 1,
+                num_astar = 2,
                 torch_empty_cache_steps=1,
                 is_bt_model=True,
                 logging_steps=1,
-                num_train_epochs=1,                
+                num_train_epochs=1,
+                max_grad_norm=0.5,
+                ratio_processing="self_normalize",              
             )
 
             # Create the trainer

@@ -61,7 +61,7 @@ class DRPOConfig(TrainingArguments):
     )
     
     max_length: int = field(
-        default=512,
+        default=256,
         metadata={
             "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
             "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "
@@ -128,16 +128,12 @@ class DRPOConfig(TrainingArguments):
     )
 
     max_prompt_length: Optional[int] = field(
-        default=512,
+        default=256,
         metadata={"help": "Maximum length of the prompt."},
     )
     max_completion_length: Optional[int] = field(
         default=None,
         metadata={"help": "Maximum length of the completion."},
-    )
-    max_length: Optional[int] = field(
-        default=1024,
-        metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
     )
 
     precompute_preference_score: bool = field(
@@ -163,6 +159,17 @@ class DRPOConfig(TrainingArguments):
     preference_model_id: Optional[str] = field(
         default="siebert/sentiment-roberta-large-english",
         metadata={"help": "Model ID of the preference model."},
+    )
+
+    ratio_processing: Union[str, None] = field(
+        default=None,
+        metadata={"help": "Processing method for the Importance Sampling ratio. if clip, you need better to provide the clipbound. "
+        "Options include `clip`, `self_normalize`, `None`. Default to None."},
+    )
+
+    clipbound: Optional[float] = field(
+        default=10.0,
+        metadata={"help": "Clip upper bound for the Importance Sampling ratio, default to 10.0."},
     )
 
 
