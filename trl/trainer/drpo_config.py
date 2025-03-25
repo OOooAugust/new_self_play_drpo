@@ -172,6 +172,11 @@ class DRPOConfig(TrainingArguments):
         metadata={"help": "Clip upper bound for the Importance Sampling ratio, default to 10.0."},
     )
 
+    forward_temperature: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Temperature for the forward pass of the model and ref_model."},
+    )
+
 
     def __post_init__(self):
         super().__post_init__()

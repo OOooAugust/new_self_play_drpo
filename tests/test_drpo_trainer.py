@@ -72,7 +72,9 @@ class TestDataLoader(unittest.TestCase):
                 logging_steps=1,
                 num_train_epochs=1,
                 max_grad_norm=0.5,
-                ratio_processing="self_normalize",              
+                ratio_processing="clip",
+                clipbound=10.0,
+                forward_temperature=2.0,              
             )
 
             # Create the trainer

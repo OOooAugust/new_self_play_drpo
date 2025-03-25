@@ -491,7 +491,7 @@ class OnlineDPOTrainer(Trainer):
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
-    def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
+    def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, temperature=1.0):
         # Get the number of tokens to truncate from prompt
         num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
 

@@ -33,7 +33,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from datasets import Dataset
 from dataclasses import dataclass
 
-from .utils import pad, truncate_right
+from .utils import pad, truncate_right, selective_log_softmax
 from ..models.utils import unwrap_model_for_generation
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
@@ -438,7 +438,7 @@ class DRPOTrainer(Trainer):
 
         return prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask
     
-    def _forward(self, model, prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask):
+    def _forward(self, model, prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask, temperature=1.0):
         # Get the number of tokens to truncate from prompt
         num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
         # print("_forward, num_tokens_to_truncate: ",num_tokens_to_truncate)
@@ -461,9 +461,11 @@ class DRPOTrainer(Trainer):
 
         # There is 1 offset, because the model predict the next token
         logits = output.logits[:, max(0, prompt_ids.size(1) - 1) : -1]
+        logits /= temperature + 1e-7
         # print("_forward, logits.shape: ",logits.shape)
         # Take the completion tokens logprob
-        logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+        logprobs = selective_log_softmax(logits, completion_ids)
+        # logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         return logprobs
     
     def training_step(self, model:nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
@@ -479,29 +481,29 @@ class DRPOTrainer(Trainer):
         rank = inputs["rank"]
 
         # log pi(y|x) shape(batch_size, 1)
-        logprobs = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask)
+        logprobs = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
 
         # sample y* for `num_astar` times
         prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(model, prompt_ids, prompt_attention_mask, self.args.num_astar)
         contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
 
         # log pi(y*|x) shape(num_astar*batch_size, 1)
-        logprobs_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+        logprobs_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
 
 
         with torch.no_grad():
             if self.ref_model is not None:
                 # log pi_ref(y|x)
-                ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask)
+                ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
                 # ref_logprobs_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
             else:
                 raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
 
-        device = logprobs.device
+        # device = logprobs.device
 
         # Compute preference score g(y*, y', x) and g(y, y', x)
         with torch.inference_mode():
-            context_length = prompt_ids.size(1)
+            # context_length = prompt_ids.size(1)
 
             prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
             prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
