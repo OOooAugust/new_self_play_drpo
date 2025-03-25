@@ -155,7 +155,7 @@ training_args = DRPOConfig(
     per_device_train_batch_size = 8,
     gradient_accumulation_steps = 1,
     learning_rate = 5.0e-7,
-    max_length = 512,
+    max_length = 256,
     temperature = 0.5,
     beta = 0.1,
     bf16 = True,
@@ -172,7 +172,8 @@ training_args = DRPOConfig(
     is_bt_model = True,
     preference_model_id = preference_pipeline_id,
     ratio_processing = "clip",
-    clipbound = 100.0,
+    clipbound = 20.0,
+    forward_temperature = 1.5,
     max_grad_norm = 1.0,
 )
 

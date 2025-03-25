@@ -239,7 +239,7 @@ class BTPipeline:
     def __call__(self, input_text: List[str]):
         batch_size = len(input_text)
         sentiment_results = self.pipeline(input_text, batch_size=batch_size, truncation=self.truncation, padding=self.padding)
-        return torch.tensor([res["score"] if res["label"] == "POSITIVE" else 1 - res["score"] for res in sentiment_results])
+        return torch.tensor([res["score"] if res["label"] == "POSITIVE" else 1 - res["score"] for res in sentiment_results]).to(self.device)
     
     def to(self, device):
         self.device = device
