@@ -4,6 +4,8 @@ import os
 import sys
 import os
 
+import yaml
+
 # Add the parent directory to Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -127,8 +129,6 @@ def transform_dataset(dataset):
 
 model_id = "Kyleyee/Qwen2-0.5B-stf-imdb"
 raw_dataset_id = "Kyleyee/train_data_imdb_subsft"
-preference_pipeline_id = "siebert/sentiment-roberta-large-english"
-output_dir = "./output"
 hub_model_id = "" #"Eehan/Qwen2-0.5B-drpo-imdb_origin"
 
 
@@ -147,34 +147,11 @@ model_args = ModelConfig(
         model_name_or_path = model_id,
 )
 
-
+with open("./DRPO_scripts/train_configs/config3.yaml", "r") as f:
+    training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(
-    output_dir = output_dir,
-    gradient_checkpointing = False,
-    per_device_train_batch_size = 8,
-    gradient_accumulation_steps = 1,
-    learning_rate = 5.0e-7,
-    max_length = 256,
-    temperature = 0.5,
-    beta = 0.1,
-    bf16 = True,
-    dataset_num_proc = 1,
-    num_astar = 4,
-    torch_empty_cache_steps = 1,
-    num_train_epochs = 1,
-    eval_steps = 50,
-    push_to_hub = False,
-    save_strategy = "no",
-    logging_steps = 50,
-    hub_model_id = hub_model_id,
-    report_to = ["wandb"],
-    is_bt_model = True,
-    preference_model_id = preference_pipeline_id,
-    ratio_processing = "clip",
-    clipbound = 20.0,
-    forward_temperature = 1.5,
-    max_grad_norm = 1.0,
+    **training_args_config
 )
 
 

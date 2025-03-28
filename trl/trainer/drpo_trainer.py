@@ -55,7 +55,7 @@ from .utils import (
     get_comet_experiment_url,
     truncate_right,
 )
-from .drpo_utils import get_preference_score # TODO: write get_preference_score function
+from .drpo_utils import get_preference_score
 
 
 # if is_peft_available():
@@ -219,7 +219,7 @@ class DRPOTrainer(Trainer):
 
         self.stats = {
             "logps/a1": [],
-            "reflogps/a1": [],
+            "logps/a1_ref": [],
             "logps/a*": [],
             "ps/a1": [],
             "ps/a*": [],
@@ -229,10 +229,12 @@ class DRPOTrainer(Trainer):
             "objective/loss2": [],
             "objective/loss": [],
             "is_ratio": [],
+            "ps/rank": [],
         }
         
         if args.ratio_processing == "clip":
-            self.stats["objective/loss1_clipped"] = []
+            # self.stats["objective/loss1_clipped"] = []
+            self.stats["clipped_ratio"] = []
 
 
     @property
@@ -478,7 +480,8 @@ class DRPOTrainer(Trainer):
         a1_attention_mask = inputs["a1_attention_mask"]
         a2_ids = inputs["a2_ids"]
         a2_attention_mask = inputs["a2_attention_mask"]
-        rank = inputs["rank"]
+        rank = inputs["rank"].float()
+        # print("rank: ", rank)
 
         # log pi(y|x) shape(batch_size, 1)
         logprobs = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
@@ -495,7 +498,7 @@ class DRPOTrainer(Trainer):
             if self.ref_model is not None:
                 # log pi_ref(y|x)
                 ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
-                # ref_logprobs_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+                ref_logprobs_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
             else:
                 raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
 
@@ -519,7 +522,8 @@ class DRPOTrainer(Trainer):
                 self.preference_model, 
                 prompt_astar, 
                 prompt_a2_repeated,
-                is_bt_model = self.args.is_bt_model
+                is_bt_model = self.args.is_bt_model,
+                kwargs=self.args.preference_model_kwargs or {}
             )
             
             if self.args.missing_eos_penalty is not None:
@@ -535,12 +539,12 @@ class DRPOTrainer(Trainer):
                 assert(len(prompt_a1) == len(prompt_a2))
                 
 
-                # TODO: write get_preference_score function
                 preference_score = get_preference_score(
                     self.preference_model, 
                     prompt_a1, 
                     prompt_a2,
-                    is_bt_model = self.args.is_bt_model
+                    is_bt_model = self.args.is_bt_model,
+                    kwargs = self.args.preference_model_kwargs or {}
                 )
             else:
                 preference_score = inputs["preference_score"]
@@ -552,27 +556,41 @@ class DRPOTrainer(Trainer):
         # take mean over num_astar
         logprobs_star_sum = (logprobs_star * astar_attention_mask).sum(-1).mean(0)
 
+        ref_logprobs_star = ref_logprobs_star.view(self.args.num_astar, batch_size, -1)
+        # ref_logprobs_star_sum = (ref_logprobs_star * astar_attention_mask).sum(-1).mean(0)
+
         preference_score_star = preference_score_star.view(self.args.num_astar, -1).mean(0)
-        losses2 = - logprobs_star_sum * preference_score_star
+        losses2 = -logprobs_star_sum * preference_score_star
 
         # Compute the penalty term of kl divergence
-        # kl_onpolicy_part = ((logprobs_star - ref_logprobs_star)*astar_attention_mask).sum(-1) 
+        kl_onpolicy_part = ((logprobs_star - ref_logprobs_star)*astar_attention_mask).sum(-1)
+        print("kl_onpolicy_part", kl_onpolicy_part)
         kl_offline_part = ((logprobs - ref_logprobs)*a1_attention_mask).sum(-1)
-        # mean_kl = torch.cat((kl_onpolicy_part, kl_offline_part), dim=0).mean()
-        mean_kl = kl_offline_part.mean()
+        print("kl_offline_part", kl_offline_part)
+        # mean_kl = torch.stack((kl_onpolicy_part, kl_offline_part.unsqueeze(0)), dim=0).mean()
+        # mean_kl = kl_offline_part.mean()
+        mean_kl = kl_onpolicy_part.mean()
 
         # Compute the loss part one
         logprobs_sum = (logprobs * a1_attention_mask).sum(1)
         ref_logprobs_sum = (ref_logprobs * a1_attention_mask).sum(1)
-        print("pi, ref:",logprobs_sum, ref_logprobs_sum)
+        #print("pi, ref:",logprobs_sum, ref_logprobs_sum)
         
         
         if self.args.ratio_processing == "clip":
             ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
-            losses1 = - ratio*(rank - preference_score)
-            losses1_clipped =  - torch.clamp(ratio, max = self.args.clipbound)*(rank - preference_score)
-            losses1_max = torch.max(losses1, losses1_clipped)
-            loss = (losses1_max + losses2).mean()
+            # print("ratio", ratio)
+            # losses1 = -ratio*(rank - preference_score)
+            # print("losses1", losses1)
+            clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
+            # print("rank", rank)
+            # print("preference_score", preference_score)
+            losses1 =  -clipped_ratio*(rank - preference_score)
+            # print("losses1_clipped", losses1_clipped)
+            # losses1_max = torch.max(losses1, losses1_clipped)
+            # print("losses1_max", losses1_max)
+            loss = (losses1 + losses2).mean() + self.beta * mean_kl
+            # print(loss)
         
         elif self.args.ratio_processing == "self_normalize":
             print(torch.exp(logprobs_sum).mean())
@@ -581,18 +599,18 @@ class DRPOTrainer(Trainer):
             ratio_denominator = torch.exp(ref_logprobs_sum) / torch.exp(ref_logprobs_sum).mean()
             print("ratio pi/ref:", ratio_nominator, ratio_denominator)
             ratio = ratio_nominator / ratio_denominator
-            losses1 = - ratio * (rank - preference_score)
-            loss = (losses1 + losses2).mean() - self.beta * mean_kl
+            losses1 = -ratio * (rank - preference_score)
+            loss = (losses1 + losses2).mean() + self.beta * mean_kl
 
         else:
             ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
-            losses1 = - ratio * (rank - preference_score)
-            loss = (losses1 + losses2).mean() - self.beta * mean_kl
+            losses1 = -ratio * (rank - preference_score)
+            loss = (losses1 + losses2).mean() + self.beta * mean_kl
 
         # log everything
         self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logprobs_sum).mean().item())
         self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logprobs_star_sum).mean().item())
-        self.stats['reflogps/a1'].append(self.accelerator.gather_for_metrics(ref_logprobs_sum).mean().item())
+        self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logprobs_sum).mean().item())
         self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
         self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)
@@ -601,9 +619,11 @@ class DRPOTrainer(Trainer):
         self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(losses2.mean()).mean().item())
         self.stats['objective/loss'].append(self.accelerator.gather_for_metrics(loss).mean().item())
         self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean()).mean().item())
+        self.stats['ps/rank'].append(self.accelerator.gather_for_metrics(rank).mean().item())
 
         if self.args.ratio_processing == "clip":
-            self.stats['objective/loss1_clipped'].append(self.accelerator.gather_for_metrics(losses1_max.mean()).mean().item())
+            # self.stats['objective/loss1_clipped'].append(self.accelerator.gather_for_metrics(losses1_max.mean()).mean().item())
+            self.stats['clipped_ratio'].append(self.accelerator.gather_for_metrics(clipped_ratio).mean().item())
 
         
 

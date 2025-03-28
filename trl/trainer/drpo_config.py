@@ -55,6 +55,13 @@ class DRPOConfig(TrainingArguments):
         }
     )
 
+    preference_model_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional arguments for the preference model, e.g. `{'indifferent': False, 'random': False, 'reverse': False}`."
+        }
+    )
+
     max_new_tokens: int = field(
         default=64,
         metadata={"help": "Maximum number of tokens to generate per completion."},

@@ -207,9 +207,13 @@ class GPMPipeline:
 
 
 
-def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True):
+def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None):
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
+    if kwargs.get("indifferent", False):
+        return torch.ones(a_1_iuput.shape[0]).to(a_1_iuput.device) * 0.5
+    if kwargs.get("random", False):
+        return torch.rand(a_1_iuput.shape[0]).to(a_1_iuput.device)
     a_1_reward = preference_model(a_1_iuput)
     a_2_reward = preference_model(a_2_input)
     if is_bt_model:
@@ -227,6 +231,8 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
                 result = torch.bmm(transformed_a_1.view(a_1_reward.shape[0], 1, preference_model.value_head_dim), a_2_reward.view(a_2_reward.shape[0], preference_model.value_head_dim, 1))
                 result = result.view(a_1_reward.shape[0])  
     p = F.sigmoid(result)
+    if kwargs.get("reverse", False):
+        p = 1 - p
     return p
 
 
@@ -240,7 +246,7 @@ class BTPipeline:
         batch_size = len(input_text)
         sentiment_results = self.pipeline(input_text, batch_size=batch_size, truncation=self.truncation, padding=self.padding)
         return torch.tensor([res["score"] if res["label"] == "POSITIVE" else 1 - res["score"] for res in sentiment_results]).to(self.device)
-    
+        
     def to(self, device):
         self.device = device
         self.pipeline.model.to(device)
