@@ -14,6 +14,7 @@ from typing import Optional
 from datasets import  DatasetDict
 from datasets import load_dataset
 from huggingface_hub import ModelCard
+from .utils import selective_log_softmax
 
 
 def get_tokenizer(pretrain, model, padding_side="left", use_fast=True):
@@ -251,3 +252,56 @@ class BTPipeline:
         self.device = device
         self.pipeline.model.to(device)
         return self 
+    
+
+class estDPOStylePipeline:
+    def __init__(self, model_name_or_path: dict, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True, beta: float=0.1, max_length: int=512):
+        """
+        calculate preference by DPO-style estimation,
+        given prompt_response, policy_model and the reference_model,
+        this will return beta*(log p(prompt_response) - log p_ref(prompt_response))
+        no worries about counting in the probs of prompt, 
+        since it will be cancelled out when computing the sigmoid(a1_reward - a2_reward), where a1_reward is just self.__call__(a1)
+        which is beta*(log p(prompt_a1) - log p_ref(prompt_a1))
+        note model_name_or_path should be a dict with keys 'policy' and 'reference'
+        """
+        self.policy = AutoModelForCausalLM.from_pretrained(model_name_or_path['policy']).to(device)
+        self.reference = AutoModelForCausalLM.from_pretrained(model_name_or_path['reference']).to(device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path['policy'])
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.truncation=truncation
+        self.padding=padding
+        self.beta = beta
+        self.max_length = max_length
+
+    def __call__(self, input_text: List[str]):
+        policy_logprobs = self._calc_logprobs(self.policy, input_text)
+        reference_logprobs = self._calc_logprobs(self.reference, input_text)
+        diff = policy_logprobs - reference_logprobs       
+        return torch.tensor(self.beta * diff).to(self.device)
+
+    def _calc_logprobs(self, model, text:list[str]):
+        inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=self.padding,
+            truncation=self.truncation,
+            max_length=self.max_length,
+            return_attention_mask=True
+        )
+        with torch.no_grad():
+            outputs = model(**inputs)
+        # note 1 offset for the logits stand for the next position
+        logits = outputs.logits[:, :-1, :]
+        # remove the first token so as to align token_ids and logits
+        input_ids = inputs["input_ids"][:,1:]
+        attention_mask = inputs["attention_mask"][:,1:]
+
+        logprobs = selective_log_softmax(logits, input_ids)
+        return (logprobs * attention_mask).sum(-1)
+        
+    def to(self, device):
+        self.device = device
+        self.reference.to(device)
+        self.policy.to(device)
+        return self
