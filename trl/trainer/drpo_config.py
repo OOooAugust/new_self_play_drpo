@@ -184,6 +184,16 @@ class DRPOConfig(TrainingArguments):
         metadata={"help": "Temperature for the forward pass of the model and ref_model."},
     )
 
+    loss1_only: bool = field(
+        default=False,
+        metadata={"help": "Whether to only use the loss1."},
+    )
+    
+    loss2_only: bool = field(
+        default=False,
+        metadata={"help": "Whether to only use the loss2."},
+    )
+
 
     def __post_init__(self):
         super().__post_init__()

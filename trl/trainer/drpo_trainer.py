@@ -416,8 +416,8 @@ class DRPOTrainer(Trainer):
         return self.accelerator.prepare(eval_dataloader)
     
     def _generate(self, model, prompt_ids: torch.tensor, prompt_attention_mask: torch.tensor, num_astar:int = 1):
-        eos_token_id = self.tokenizer.eos_token_id
-        pad_token_id = self.tokenizer.pad_token_id
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
 
         # inputs = [{"prompt": prompt} for prompt in prompts]
         # inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
@@ -564,12 +564,14 @@ class DRPOTrainer(Trainer):
 
         # Compute the penalty term of kl divergence
         kl_onpolicy_part = ((logprobs_star - ref_logprobs_star)*astar_attention_mask).sum(-1)
-        print("kl_onpolicy_part", kl_onpolicy_part)
+        # print("kl_onpolicy_part", kl_onpolicy_part)
         kl_offline_part = ((logprobs - ref_logprobs)*a1_attention_mask).sum(-1)
-        print("kl_offline_part", kl_offline_part)
+        # print("kl_offline_part", kl_offline_part)
         # mean_kl = torch.stack((kl_onpolicy_part, kl_offline_part.unsqueeze(0)), dim=0).mean()
         # mean_kl = kl_offline_part.mean()
         mean_kl = kl_onpolicy_part.mean()
+
+
 
         # Compute the loss part one
         logprobs_sum = (logprobs * a1_attention_mask).sum(1)
@@ -579,18 +581,8 @@ class DRPOTrainer(Trainer):
         
         if self.args.ratio_processing == "clip":
             ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
-            # print("ratio", ratio)
-            # losses1 = -ratio*(rank - preference_score)
-            # print("losses1", losses1)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-            # print("rank", rank)
-            # print("preference_score", preference_score)
             losses1 =  -clipped_ratio*(rank - preference_score)
-            # print("losses1_clipped", losses1_clipped)
-            # losses1_max = torch.max(losses1, losses1_clipped)
-            # print("losses1_max", losses1_max)
-            loss = (losses1 + losses2).mean() + self.beta * mean_kl
-            # print(loss)
         
         elif self.args.ratio_processing == "self_normalize":
             print(torch.exp(logprobs_sum).mean())
@@ -600,12 +592,20 @@ class DRPOTrainer(Trainer):
             print("ratio pi/ref:", ratio_nominator, ratio_denominator)
             ratio = ratio_nominator / ratio_denominator
             losses1 = -ratio * (rank - preference_score)
-            loss = (losses1 + losses2).mean() + self.beta * mean_kl
 
         else:
             ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
             losses1 = -ratio * (rank - preference_score)
+        
+        if self.args.loss2_only:
+            loss = losses2.mean() + self.beta * mean_kl
+            # print(losses2.mean(), mean_kl)
+            # print(loss)
+        elif self.args.loss1_only:
+            loss = losses1.mean() + self.beta * mean_kl
+        else:
             loss = (losses1 + losses2).mean() + self.beta * mean_kl
+            
 
         # log everything
         self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logprobs_sum).mean().item())

@@ -207,13 +207,13 @@ class GPMPipeline:
 
 
 
-def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None):
+def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
     if kwargs.get("indifferent", False):
-        return torch.ones(a_1_iuput.shape[0]).to(a_1_iuput.device) * 0.5
+        return torch.ones(len(a_1_iuput)).to(device) * 0.5
     if kwargs.get("random", False):
-        return torch.rand(a_1_iuput.shape[0]).to(a_1_iuput.device)
+        return torch.rand(len(a_1_iuput)).to(device)
     a_1_reward = preference_model(a_1_iuput)
     a_2_reward = preference_model(a_2_input)
     if is_bt_model:
