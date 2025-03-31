@@ -22,7 +22,7 @@ report_to:
 is_bt_model: true
 preference_model_id: siebert/sentiment-roberta-large-english
 preference_model_kwargs:
-  indifferent: true
+  indifferent: false
   random: false
   reverse: false
 ratio_processing: clip

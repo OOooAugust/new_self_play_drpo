@@ -24,7 +24,7 @@ preference_model_id:
   policy: Kyleyee/Qwen2-0.5B-DPO-imdb
   reference: Kyleyee/Qwen2-0.5B-stf-imdb
 preference_model_kwargs:
-  indifferent: true
+  indifferent: false
   random: false
   reverse: false
 ratio_processing: clip

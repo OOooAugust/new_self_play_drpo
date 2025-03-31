@@ -265,43 +265,53 @@ class estDPOStylePipeline:
         which is beta*(log p(prompt_a1) - log p_ref(prompt_a1))
         note model_name_or_path should be a dict with keys 'policy' and 'reference'
         """
-        self.policy = AutoModelForCausalLM.from_pretrained(model_name_or_path['policy']).to(device)
-        self.reference = AutoModelForCausalLM.from_pretrained(model_name_or_path['reference']).to(device)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path['policy'])
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.truncation=truncation
-        self.padding=padding
+        self.device = device
         self.beta = beta
+        self.truncation = truncation
+        self.padding = padding
         self.max_length = max_length
 
-    def __call__(self, input_text: List[str]):
-        policy_logprobs = self._calc_logprobs(self.policy, input_text)
-        reference_logprobs = self._calc_logprobs(self.reference, input_text)
-        diff = policy_logprobs - reference_logprobs       
-        return torch.tensor(self.beta * diff).to(self.device)
+        self.policy = AutoModelForCausalLM.from_pretrained(model_name_or_path["policy"]).to(device)
+        self.reference = AutoModelForCausalLM.from_pretrained(model_name_or_path["reference"]).to(device)
 
-    def _calc_logprobs(self, model, text:list[str]):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path["policy"])
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def __call__(self, input_text: List[str]) -> torch.Tensor:
+        try:
+            policy_logprobs = self._calc_logprobs(self.policy, input_text)
+            reference_logprobs = self._calc_logprobs(self.reference, input_text)
+            diff = policy_logprobs - reference_logprobs
+            result = self.beta * diff
+        finally:
+            # 及时释放显存
+            torch.cuda.empty_cache()
+        return result
+
+    def _calc_logprobs(self, model, texts: List[str]) -> torch.Tensor:
         inputs = self.tokenizer(
-            text,
+            texts,
             return_tensors="pt",
             padding=self.padding,
             truncation=self.truncation,
             max_length=self.max_length,
             return_attention_mask=True
         )
+        inputs = {k: v.to(self.device, non_blocking=True) for k, v in inputs.items()}
+
         with torch.no_grad():
             outputs = model(**inputs)
-        # note 1 offset for the logits stand for the next position
-        logits = outputs.logits[:, :-1, :]
-        # remove the first token so as to align token_ids and logits
-        input_ids = inputs["input_ids"][:,1:]
-        attention_mask = inputs["attention_mask"][:,1:]
+            logits = outputs.logits[:, :-1, :]
+            input_ids = inputs["input_ids"][:, 1:]
+            attention_mask = inputs["attention_mask"][:, 1:]
+            logprobs = selective_log_softmax(logits, input_ids)
+            final_score = (logprobs * attention_mask).sum(-1)
+        del inputs, outputs, logits, input_ids, attention_mask, logprobs
+        torch.cuda.empty_cache()
+        return final_score
 
-        logprobs = selective_log_softmax(logits, input_ids)
-        return (logprobs * attention_mask).sum(-1)
-        
-    def to(self, device):
+    def to(self, device: torch.device):
         self.device = device
-        self.reference.to(device)
         self.policy.to(device)
+        self.reference.to(device)
         return self
