@@ -66,7 +66,7 @@ if __name__ == "__main__":
     dataset = load_dataset("stanfordnlp/imdb")["test"]
     dataset = dataset.remove_columns(['label'])
     # use randomly sampled 1000 samples
-    dataset = dataset.shuffle(seed=666).select(range(1000))
+    dataset = dataset.shuffle(seed=42).select(range(5000))
     
     # 初始化模型列表
     model_names = [
@@ -74,6 +74,9 @@ if __name__ == "__main__":
         "Eehan/Qwen2-0.5B-drpo-imdb-default-1",
         "Eehan/Qwen2-0.5B-drpo-imdb-default-3",
         "Eehan/Qwen2-0.5B-drpo-imdb-indifferent-4",
+        "Eehan/Qwen2-0.5B-drpo-imdb-loss1_only-5",
+        "Eehan/Qwen2-0.5B-drpo-imdb-loss2_only-6",
+        "Eehan/Qwen2-0.5B-drpo-imdb-est_dpo_style-7"
     ]
     
     # 预加载所有模型
@@ -101,5 +104,5 @@ if __name__ == "__main__":
     
     # 推送结果到Hub
     print("Pushing to Hub...")
-    processed.push_to_hub("Eehan/eval-imdb-drpo-1-3-4-dpo-1000")
+    processed.push_to_hub("Eehan/eval-imdb-drpo-134567-dpo-5000")
     

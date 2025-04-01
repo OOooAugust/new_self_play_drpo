@@ -602,6 +602,7 @@ class DRPOTrainer(Trainer):
             # print(losses2.mean(), mean_kl)
             # print(loss)
         elif self.args.loss1_only:
+            losses1 = -clipped_ratio * rank
             loss = losses1.mean() + self.beta * mean_kl
         else:
             loss = (losses1 + losses2).mean() + self.beta * mean_kl
@@ -615,8 +616,10 @@ class DRPOTrainer(Trainer):
         self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)
         self.stats['objective/kl'].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-        self.stats['objective/loss1'].append(self.accelerator.gather_for_metrics(losses1.mean()).mean().item())
-        self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(losses2.mean()).mean().item())
+        if not self.args.loss2_only:
+            self.stats['objective/loss1'].append(self.accelerator.gather_for_metrics(losses1).mean().item())
+        if not self.args.loss1_only:
+            self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(losses2).mean().item())
         self.stats['objective/loss'].append(self.accelerator.gather_for_metrics(loss).mean().item())
         self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean()).mean().item())
         self.stats['ps/rank'].append(self.accelerator.gather_for_metrics(rank).mean().item())
