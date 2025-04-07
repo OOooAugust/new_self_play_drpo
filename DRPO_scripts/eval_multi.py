@@ -57,7 +57,7 @@ def extract_dialogue(examples: dict, temperature: float, models: dict) -> dict:
         # 清理模型名称作为字段名
         safe_name = model_name.replace("Kyleyee/Qwen2-0.5B-", "")
         # safe_name = model_name.replace("/", "_")
-        # results[f"{safe_name}_responses"] = responses
+        results[f"{safe_name}_responses"] = responses
         results[f"{safe_name}_scores"] = scores
     
     return results
@@ -66,17 +66,22 @@ if __name__ == "__main__":
     dataset = load_dataset("stanfordnlp/imdb")["test"]
     dataset = dataset.remove_columns(['label'])
     # use randomly sampled 1000 samples
-    dataset = dataset.shuffle(seed=42).select(range(5000))
+    dataset = dataset.shuffle(seed=42).select(range(1000))
     
     # 初始化模型列表
     model_names = [
         "Kyleyee/Qwen2-0.5B-DPO-imdb-tm-tp",
+        "Kyleyee/Qwen2-0.5B-stf-imdb",
         "Eehan/Qwen2-0.5B-drpo-imdb-default-1",
         "Eehan/Qwen2-0.5B-drpo-imdb-default-3",
         "Eehan/Qwen2-0.5B-drpo-imdb-indifferent-4",
         "Eehan/Qwen2-0.5B-drpo-imdb-loss1_only-5",
         "Eehan/Qwen2-0.5B-drpo-imdb-loss2_only-6",
-        "Eehan/Qwen2-0.5B-drpo-imdb-est_dpo_style-7"
+        "Eehan/Qwen2-0.5B-drpo-imdb-est_dpo_style-7",
+        "Eehan/Qwen2-0.5B-drpo-imdb-loss2_only-indifferent-8",
+        "Eehan/Qwen2-0.5B-drpo-imdb-est_dpo_style-9",
+        "Eehan/Qwen2-0.5B-drpo-imdb-loss2_only-centerp-10",
+        "Eehan/Qwen2-0.5B-drpo-imdb-gentemper-1.2-0"
     ]
     
     # 预加载所有模型
@@ -84,7 +89,7 @@ if __name__ == "__main__":
     models = {name: load_model(name) for name in model_names}
     
     # 设置温度参数
-    temperatures = [0, 0.25, 0.5, 0.75, 1]
+    temperatures = [0.5, 1, 1.2]
     processed = DatasetDict()
     
     # 遍历每个温度
@@ -104,5 +109,5 @@ if __name__ == "__main__":
     
     # 推送结果到Hub
     print("Pushing to Hub...")
-    processed.push_to_hub("Eehan/eval-imdb-drpo-134567-dpo-5000")
+    processed.push_to_hub("Eehan/eval-imdb-xxx-1000")
     

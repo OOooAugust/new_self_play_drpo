@@ -212,7 +212,7 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
     if kwargs.get("indifferent", False):
-        return torch.ones(len(a_1_iuput)).to(device) * 0.5
+        return torch.zeros(len(a_1_iuput)).to(device) * 0.5
     if kwargs.get("random", False):
         return torch.rand(len(a_1_iuput)).to(device)
     a_1_reward = preference_model(a_1_iuput)
@@ -234,7 +234,7 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     p = F.sigmoid(result)
     if kwargs.get("reverse", False):
         p = 1 - p
-    return p
+    return p   # to make it symmetric around 0, so that 0.5 is indifferent
 
 
 class BTPipeline:
