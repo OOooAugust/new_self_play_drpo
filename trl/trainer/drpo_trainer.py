@@ -221,7 +221,7 @@ class DRPOTrainer(Trainer):
             "logps/a1": [],
             "logps/a1_ref": [],
             "logps/a*": [],
-            "logps/a*ref": [],
+            "logps/a*_ref": [],
             "ps/a1": [],
             "ps/a*": [],
             "beta": [],
@@ -551,7 +551,8 @@ class DRPOTrainer(Trainer):
                     kwargs = self.args.preference_model_kwargs or {}
                 )
             else:
-                preference_score = inputs["preference_score"]
+                # preference_score = inputs["preference_score"]
+                raise NotImplementedError("precompute_preference_score is not implemented yet.")
 
         # Compute the loss part two
         assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
@@ -559,14 +560,14 @@ class DRPOTrainer(Trainer):
         # astar_attention_mask = astar_attention_mask.view(self.args.num_astar, batch_size, -1)
     
         logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
-        # print("logps_star_sum: ", logps_star_sum)
+        print("logps_star_sum: ", logps_star_sum)
 
         # per_token_ref_logps_star = per_token_ref_logps_star.view(self.args.num_astar, batch_size, -1)
         # ref_logps_star_sum = (ref_logps_star * astar_attention_mask).sum(-1).mean(0)
 
         # preference_score_star = preference_score_star.view(self.args.num_astar, -1)
         print("preference_score_star: ", preference_score_star)
-        loss2 = -(logps_star_sum * preference_score_star).mean()
+        loss2 = -(logps_star_sum * preference_score_star.clone().detach()).mean()
         print("loss2: ", loss2)
 
         # Compute the penalty term of kl divergence
@@ -585,33 +586,35 @@ class DRPOTrainer(Trainer):
         # Compute the loss part one
         logps_sum = (per_token_logps * a1_attention_mask).sum(1)
         ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
-        #print("pi, ref:",logps_sum, ref_logps_sum)
+        print("pi, ref:",logps_sum, ref_logps_sum)
         
         
         if self.args.ratio_processing == "clip":
             ratio = torch.exp(logps_sum - ref_logps_sum)
+            print("ratio",ratio)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-            losses1 =  -clipped_ratio*(rank - preference_score)
+            losses1 =  -clipped_ratio*(rank - preference_score.clone()).detach()
+            print("loss1", losses1.mean())
         
         elif self.args.ratio_processing == "self_normalize":
             print(torch.exp(logps_sum).mean())
             print(torch.exp(ref_logps_sum).mean())
             ratio_nominator = torch.exp(logps_sum) / torch.exp(logps_sum).mean()
             ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
-            print("ratio pi/ref:", ratio_nominator, ratio_denominator)
+            print("ratio pi, ref:", ratio_nominator, ratio_denominator)
             ratio = ratio_nominator / ratio_denominator
-            losses1 = -ratio * (rank - preference_score)
+            losses1 = -ratio * (rank - preference_score.clone()).detach()
 
         else:
             ratio = torch.exp(logps_sum - ref_logps_sum)
-            losses1 = -ratio * (rank - preference_score)
+            losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
         
         if self.args.loss2_only:
             loss = loss2 + self.beta * mean_kl
             # print(losses2.mean(), mean_kl)
             # print(loss)
         elif self.args.loss1_only:
-            losses1 = -clipped_ratio * rank
+            losses1 = -clipped_ratio * rank.detach()
             loss = losses1.mean() + self.beta * mean_kl
         else:
             loss = losses1.mean() + loss2 + self.beta * mean_kl
@@ -621,7 +624,7 @@ class DRPOTrainer(Trainer):
         self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps_sum).mean().item())
         self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star_sum).mean().item())
         self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logps_sum).mean().item())
-        self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star).mean().item())
+        self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star).sum(-1).mean().item())
         self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
         self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)
@@ -654,10 +657,12 @@ class DRPOTrainer(Trainer):
 
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
+        
+        loss = loss / self.args.gradient_accumulation_steps
 
         self.accelerator.backward(loss, **kwargs)
 
-        return loss.detach() / self.args.gradient_accumulation_steps
+        return loss.detach()
     
     def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
