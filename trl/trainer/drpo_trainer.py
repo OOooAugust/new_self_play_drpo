@@ -221,12 +221,11 @@ class DRPOTrainer(Trainer):
             "logps/a1": [],
             "logps/a1_ref": [],
             "logps/a*": [],
+            "logps/a*ref": [],
             "ps/a1": [],
             "ps/a*": [],
             "beta": [],
             "objective/kl": [],
-            "objective/loss1": [],
-            "objective/loss2": [],
             "objective/loss": [],
             "is_ratio": [],
             "ps/rank": [],
@@ -235,6 +234,11 @@ class DRPOTrainer(Trainer):
         if args.ratio_processing == "clip":
             # self.stats["objective/loss1_clipped"] = []
             self.stats["clipped_ratio"] = []
+        
+        if not args.loss2_only:
+            self.stats["objective/loss1"] = []
+        if not args.loss1_only:
+            self.stats["objective/loss2"] = []
 
 
     @property
@@ -457,7 +461,7 @@ class DRPOTrainer(Trainer):
         prompt_completion_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
         # print("_forward, prompt_completion_ids.shape: ",prompt_completion_ids.shape)
 
-        # Get the logprobs of the completions from the model
+        # Get the logps of the completions from the model
         output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
         # print("_forward, output.logits.shape: ",output.logits.shape)
 
@@ -465,10 +469,10 @@ class DRPOTrainer(Trainer):
         logits = output.logits[:, max(0, prompt_ids.size(1) - 1) : -1]
         logits /= temperature + 1e-7
         # print("_forward, logits.shape: ",logits.shape)
-        # Take the completion tokens logprob
-        logprobs = selective_log_softmax(logits, completion_ids)
-        # logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-        return logprobs
+        # Take the completion tokens logp
+        logps = selective_log_softmax(logits, completion_ids)
+        # logps = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+        return logps
     
     def training_step(self, model:nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
         model.train()
@@ -484,25 +488,25 @@ class DRPOTrainer(Trainer):
         # print("rank: ", rank)
 
         # log pi(y|x) shape(batch_size, 1)
-        logprobs = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+        per_token_logps = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
 
         # sample y* for `num_astar` times
         prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(model, prompt_ids, prompt_attention_mask, self.args.num_astar)
         contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
 
         # log pi(y*|x) shape(num_astar*batch_size, 1)
-        logprobs_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
+        per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
 
 
         with torch.no_grad():
             if self.ref_model is not None:
                 # log pi_ref(y|x)
-                ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
-                ref_logprobs_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+                per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+                per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
             else:
                 raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
 
-        # device = logprobs.device
+        # device = logps.device
 
         # Compute preference score g(y*, y', x) and g(y, y', x)
         with torch.inference_mode():
@@ -550,22 +554,27 @@ class DRPOTrainer(Trainer):
                 preference_score = inputs["preference_score"]
 
         # Compute the loss part two
-        assert logprobs_star.size(0) == batch_size * self.args.num_astar
-        logprobs_star = logprobs_star.view(self.args.num_astar, batch_size, -1)
-        astar_attention_mask = astar_attention_mask.view(self.args.num_astar, batch_size, -1)
-        # take mean over num_astar
-        logprobs_star_sum = (logprobs_star * astar_attention_mask).sum(-1).mean(0)
+        assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
+        # per_token_logps_star = per_token_logps_star.view(self.args.num_astar, batch_size, -1)
+        # astar_attention_mask = astar_attention_mask.view(self.args.num_astar, batch_size, -1)
+    
+        logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
+        # print("logps_star_sum: ", logps_star_sum)
 
-        ref_logprobs_star = ref_logprobs_star.view(self.args.num_astar, batch_size, -1)
-        # ref_logprobs_star_sum = (ref_logprobs_star * astar_attention_mask).sum(-1).mean(0)
+        # per_token_ref_logps_star = per_token_ref_logps_star.view(self.args.num_astar, batch_size, -1)
+        # ref_logps_star_sum = (ref_logps_star * astar_attention_mask).sum(-1).mean(0)
 
-        preference_score_star = preference_score_star.view(self.args.num_astar, -1).mean(0)
-        losses2 = -logprobs_star_sum * preference_score_star
+        # preference_score_star = preference_score_star.view(self.args.num_astar, -1)
+        print("preference_score_star: ", preference_score_star)
+        loss2 = -(logps_star_sum * preference_score_star).mean()
+        print("loss2: ", loss2)
 
         # Compute the penalty term of kl divergence
-        kl_onpolicy_part = ((logprobs_star - ref_logprobs_star)*astar_attention_mask).sum(-1)
-        # print("kl_onpolicy_part", kl_onpolicy_part)
-        kl_offline_part = ((logprobs - ref_logprobs)*a1_attention_mask).sum(-1)
+       
+        # kl_offline_part = ((torch.exp(per_token_ref_logps - per_token_logps) - (per_token_ref_logps - per_token_logps) - 1)*astar_attention_mask).sum(-1)
+        # kl_onpolicy_part = ((per_token_logps_star - per_token_ref_logps_star)*astar_attention_mask).sum(-1)
+        kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
+        print("kl_onpolicy_part", kl_onpolicy_part)
         # print("kl_offline_part", kl_offline_part)
         # mean_kl = torch.stack((kl_onpolicy_part, kl_offline_part.unsqueeze(0)), dim=0).mean()
         # mean_kl = kl_offline_part.mean()
@@ -574,44 +583,45 @@ class DRPOTrainer(Trainer):
 
 
         # Compute the loss part one
-        logprobs_sum = (logprobs * a1_attention_mask).sum(1)
-        ref_logprobs_sum = (ref_logprobs * a1_attention_mask).sum(1)
-        #print("pi, ref:",logprobs_sum, ref_logprobs_sum)
+        logps_sum = (per_token_logps * a1_attention_mask).sum(1)
+        ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
+        #print("pi, ref:",logps_sum, ref_logps_sum)
         
         
         if self.args.ratio_processing == "clip":
-            ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
+            ratio = torch.exp(logps_sum - ref_logps_sum)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
             losses1 =  -clipped_ratio*(rank - preference_score)
         
         elif self.args.ratio_processing == "self_normalize":
-            print(torch.exp(logprobs_sum).mean())
-            print(torch.exp(ref_logprobs_sum).mean())
-            ratio_nominator = torch.exp(logprobs_sum) / torch.exp(logprobs_sum).mean()
-            ratio_denominator = torch.exp(ref_logprobs_sum) / torch.exp(ref_logprobs_sum).mean()
+            print(torch.exp(logps_sum).mean())
+            print(torch.exp(ref_logps_sum).mean())
+            ratio_nominator = torch.exp(logps_sum) / torch.exp(logps_sum).mean()
+            ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
             print("ratio pi/ref:", ratio_nominator, ratio_denominator)
             ratio = ratio_nominator / ratio_denominator
             losses1 = -ratio * (rank - preference_score)
 
         else:
-            ratio = torch.exp(logprobs_sum - ref_logprobs_sum)
+            ratio = torch.exp(logps_sum - ref_logps_sum)
             losses1 = -ratio * (rank - preference_score)
         
         if self.args.loss2_only:
-            loss = losses2.mean() + self.beta * mean_kl
+            loss = loss2 + self.beta * mean_kl
             # print(losses2.mean(), mean_kl)
             # print(loss)
         elif self.args.loss1_only:
             losses1 = -clipped_ratio * rank
             loss = losses1.mean() + self.beta * mean_kl
         else:
-            loss = (losses1 + losses2).mean() + self.beta * mean_kl
+            loss = losses1.mean() + loss2 + self.beta * mean_kl
             
 
         # log everything
-        self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logprobs_sum).mean().item())
-        self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logprobs_star_sum).mean().item())
-        self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logprobs_sum).mean().item())
+        self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps_sum).mean().item())
+        self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star_sum).mean().item())
+        self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logps_sum).mean().item())
+        self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star).mean().item())
         self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
         self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)
@@ -619,7 +629,7 @@ class DRPOTrainer(Trainer):
         if not self.args.loss2_only:
             self.stats['objective/loss1'].append(self.accelerator.gather_for_metrics(losses1).mean().item())
         if not self.args.loss1_only:
-            self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(losses2).mean().item())
+            self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(loss2).item())
         self.stats['objective/loss'].append(self.accelerator.gather_for_metrics(loss).mean().item())
         self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean()).mean().item())
         self.stats['ps/rank'].append(self.accelerator.gather_for_metrics(rank).mean().item())

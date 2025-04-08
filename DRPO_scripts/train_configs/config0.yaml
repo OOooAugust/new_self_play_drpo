@@ -5,8 +5,8 @@ per_device_train_batch_size: 12
 gradient_accumulation_steps: 1
 learning_rate: 5.0e-7
 max_length: 512
-temperature: 0.8
-beta: 1.0
+temperature: 1.2
+beta: 0.01
 bf16: true
 dataset_num_proc: 1
 num_astar: 4
@@ -16,12 +16,18 @@ eval_steps: 50
 push_to_hub: false
 save_strategy: "no"
 logging_steps: 5
-hub_model_id: Eehan/Qwen2-0.5B-drpo-imdb_origin
+hub_model_id: Eehan/Qwen2-0.5B-drpo-imdb-gentemper-1.2-0
 report_to: 
   - wandb
 is_bt_model: true
 preference_model_id: siebert/sentiment-roberta-large-english
+preference_model_kwargs:
+  indifferent: false
+  random: false
+  reverse: false
 ratio_processing: clip
-clipbound: 1.0
-forward_temperature: 0.5
+clipbound: 5.0
+forward_temperature: 1.0 
 max_grad_norm: 1.0
+loss1_only: false
+loss2_only: false
