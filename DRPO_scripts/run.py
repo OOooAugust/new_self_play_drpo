@@ -133,11 +133,19 @@ def transform_dataset(dataset):
 ##################################
 
 model_id = "Kyleyee/Qwen2-0.5B-stf-imdb"
-raw_dataset_id = "Kyleyee/train_data_imdb_subsft"
-
+raw_dataset_id = "Kyleyee/train_data_imdb_for_drdpo_preference"
+def extract_dialogue(examples: dict):
+        a1 = [" " + " ".join(text.split()[5:]) for text in examples["a1"]]
+        a2 = [" " + " ".join(text.split()[5:]) for text in examples["a2"]]
+        return {
+            "a1": a1,
+            "a2": a2,
+        }
 
 raw_dataset = load_dataset(raw_dataset_id, "default")
 dataset = transform_dataset(raw_dataset)
+dataset = dataset.map(extract_dialogue,batch_size=128,batched=True)
+
 print(f"Loaded dataset sample: {dataset['train'][0]}")
 
 
