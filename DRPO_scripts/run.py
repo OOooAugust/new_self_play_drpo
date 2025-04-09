@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import numpy as np
 import random
 import torch
-from datasets import Dataset, features, load_dataset
+from datasets import Dataset, features, load_dataset, concatenate_datasets
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -121,14 +121,36 @@ def main(script_args, training_args, model_args):
 
 
 def transform_dataset(dataset):
+    # Rename columns
     dataset = dataset.rename_column("chosen", "a1")
     dataset = dataset.rename_column("rejected", "a2")
-    dataset = dataset.remove_columns(["label", "text", "a_1", "a_2", "a_1_preference", "a_2_preference", "rejected_preference"])
-    dataset = dataset.map(lambda x: {**x, 'rank': int(random.random() < x['chosen_preference'])})
-    dataset = dataset.remove_columns(["chosen_preference"])
-    return dataset
+    
+    # Remove unnecessary columns but retain 'chosen_preference' and 'rejected_preference' for now
+    dataset = dataset.remove_columns(["label", "text", "a_1", "a_2", "a_1_preference", "a_2_preference"])
+    
+    # Function to compute rank based on a preference key
+    def compute_rank(example, preference_key):
+        return {'rank': int(random.random() < example[preference_key])}
+    
+    # Process original examples
+    dataset = dataset.map(lambda x: compute_rank(x, 'chosen_preference'))
+    
+    # Create swapped examples by exchanging a1/a2 and using 'rejected_preference'
+    # swapped = dataset.map(lambda x: {
+    #     'a1': x['a2'],
+    #     'a2': x['a1'],
+    #     **compute_rank(x, 'rejected_preference')
+    # })
 
-##################################
+    swapped = dataset.map(lambda x: {'a1': x['a2'], 'a2': x['a1'],'rank': 1 - x['rank']})
+    
+    # Combine original and swapped datasets
+    combined = concatenate_datasets([dataset, swapped])
+    
+    # Remove the preference columns after processing
+    combined = combined.remove_columns(["chosen_preference", "rejected_preference"])
+    
+    return combined
 
 ##################################
 
@@ -159,7 +181,7 @@ model_args = ModelConfig(
         model_name_or_path = model_id,
 )
 
-with open("./DRPO_scripts/train_configs/config10.yaml", "r") as f:
+with open("./DRPO_scripts/train_configs/config01.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(
