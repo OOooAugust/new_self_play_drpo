@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, pipeline
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, pipeline,AutoModelForSequenceClassification
 import torch.nn.functional as F
 from transformers import AutoTokenizer     
 import os
@@ -233,6 +233,7 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
                 result = result.view(a_1_reward.shape[0])  
     p = F.sigmoid(result)
     if kwargs.get("reverse", False):
+        print("Attention: reverse the preference score is using")
         p = 1 - p
     return p   # to make it symmetric around 0, so that 0.5 is indifferent
 
@@ -252,7 +253,34 @@ class BTPipeline:
         self.device = device
         self.pipeline.model.to(device)
         return self 
-    
+
+class BTwithRewardPipeline:
+    def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True):
+        self.rm = AutoModelForSequenceClassification.from_pretrained(
+        model_name_or_path,
+        torch_dtype=torch.bfloat16,
+        device_map=device,
+        attn_implementation="flash_attention_2",
+        num_labels=1,
+    )
+        self.rm_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+
+    def __call__(self, input_text: List[str]):
+        batch_size = len(input_text)
+        inputs = self.rm_tokenizer(
+                    input_text,
+                    padding=True,
+                    truncation=False,
+                    return_tensors="pt"
+                ).to(self.rm.device)
+        with torch.no_grad():
+            self.score = self.rm(inputs).logits[0][0]
+        return self.score
+        
+    def to(self, device):
+        self.device = device
+        self.pipeline.model.to(device)
+        return self     
 
 class estDPOStylePipeline:
     def __init__(self, model_name_or_path: dict, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True, beta: float=0.1, max_length: int=512):
