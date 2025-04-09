@@ -54,6 +54,7 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     truncate_right,
+    prepare_deepspeed,
 )
 from .drpo_utils import get_preference_score
 
@@ -382,8 +383,20 @@ class DRPOTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         self._beta = args.beta
-        self.ref_model = self.ref_model.to(self.accelerator.device)
-        self.preference_model.to(self.accelerator.device)
+        if self.is_deepspeed_enabled:
+            if self.preference_model is not None:
+                self.preference_model = prepare_deepspeed(
+                    self.preference_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
+            if self.ref_model is not None:
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
+        else:
+            if self.ref_model is not None:
+                self.ref_model = self.ref_model.to(self.accelerator.device)
+            if self.preference_model is not None:
+                self.preference_model = self.preference_model.to(self.accelerator.device)
 
         self.stats = {
             "logps/a1": [],
