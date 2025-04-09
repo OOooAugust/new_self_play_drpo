@@ -146,7 +146,7 @@ print(f"Loaded swapped dataset sample: {dataset['train'][len(dataset['train'])-1
 script_args = ScriptArguments(
         dataset_name=raw_dataset_id,
         dataset_train_split="train",
-        dataset_test_split="test",
+        dataset_test_split="validation",
 )
 
 model_args = ModelConfig(
