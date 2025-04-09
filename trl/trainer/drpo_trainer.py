@@ -775,7 +775,8 @@ class DRPOTrainer(Trainer):
 
         else:
             ratio = torch.exp(logps_sum - ref_logps_sum)
-            losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
+            # losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
+            losses1 = -ratio * (rank - preference_score.clone()).detach()
         
         if self.args.loss2_only:
             loss = loss2 + self.beta * mean_kl

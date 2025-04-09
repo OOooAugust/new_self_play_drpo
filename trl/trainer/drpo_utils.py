@@ -212,9 +212,11 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
     if kwargs.get("indifferent", False):
-        return torch.zeros(len(a_1_iuput)).to(device) * 0.5
+        # return torch.zeros(len(a_1_iuput)).to(device)
+        return 0.5*torch.ones(len(a_1_iuput)).to(device)
     if kwargs.get("random", False):
-        return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
+        # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
+        return torch.rand(len(a_1_iuput)).to(device)
     a_1_reward = preference_model(a_1_iuput)
     a_2_reward = preference_model(a_2_input)
     if is_bt_model:
@@ -235,7 +237,8 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     if kwargs.get("reverse", False):
         print("Attention: reverse the preference score is using")
         p = 1 - p
-    return p - 0.5 * torch.ones(len(a_1_iuput)).to(device)
+    # return p - 0.5 * torch.ones(len(a_1_iuput)).to(device)
+    return p
 
 
 class BTPipeline:
