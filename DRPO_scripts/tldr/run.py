@@ -35,7 +35,7 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from trl.trainer.drpo_utils import GPMPipeline, BTPipeline, estDPOStylePipeline
+from trl.trainer.drpo_utils import GPMPipeline, BTPipeline, estDPOStylePipeline, BTwithRewardPipeline
 from trl.trainer import DRPOConfig, DRPOTrainer
 
 def main(script_args, training_args, model_args):
@@ -70,6 +70,7 @@ def main(script_args, training_args, model_args):
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
     # if tokenizer.chat_template is None:
     #     tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if script_args.ignore_bias_buffers:
@@ -78,11 +79,12 @@ def main(script_args, training_args, model_args):
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
     
+    # Then create your preference pipeline
     if training_args.is_bt_model:
         if isinstance(training_args.preference_model_id, dict):
             preference_pipeline = estDPOStylePipeline(training_args.preference_model_id)
         else: 
-            preference_pipeline = BTPipeline(training_args.preference_model_id)
+            preference_pipeline = BTwithRewardPipeline(training_args.preference_model_id)
     else:
         preference_pipeline = GPMPipeline(training_args.preference_model_id)
 

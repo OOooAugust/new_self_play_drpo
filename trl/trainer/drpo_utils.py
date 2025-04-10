@@ -258,31 +258,56 @@ class BTPipeline:
         return self 
 
 class BTwithRewardPipeline:
-    def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True):
+    def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=False, padding: bool=True):
         self.rm = AutoModelForSequenceClassification.from_pretrained(
-        model_name_or_path,
-        torch_dtype=torch.bfloat16,
-        device_map=device,
-        attn_implementation="flash_attention_2",
-        num_labels=1,
-    )
+            model_name_or_path,
+            torch_dtype=torch.bfloat16,
+            device_map=device,
+            attn_implementation="flash_attention_2",
+            num_labels=1,
+        )
         self.rm_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        
+        # Ensure padding token is properly set for both tokenizer and model config
+        if self.rm_tokenizer.pad_token is None:
+            self.rm_tokenizer.pad_token = self.rm_tokenizer.eos_token
+            self.rm_tokenizer.pad_token_id = self.rm_tokenizer.eos_token_id
+            self.rm.config.pad_token_id = self.rm_tokenizer.pad_token_id
+            self.rm.config.padding_side = "right"
+        
+        self.device = device
+        self.truncation = truncation
+        self.padding = padding
 
     def __call__(self, input_text: List[str]):
-        batch_size = len(input_text)
-        inputs = self.rm_tokenizer(
-                    input_text,
-                    padding=True,
-                    truncation=False,
-                    return_tensors="pt"
-                ).to(self.rm.device)
+        if isinstance(input_text, str):
+            input_text = [input_text]
+            
+        encoded_inputs = self.rm_tokenizer(
+            input_text,
+            padding=True,
+            truncation=self.truncation,
+            return_tensors="pt",
+            add_special_tokens=True,
+            return_attention_mask=True
+        )
+        
+        # Move tensors to the correct device
+        inputs = {k: v.to(self.rm.device) for k, v in encoded_inputs.items()}
+        
         with torch.no_grad():
-            self.score = self.rm(inputs).logits[0][0]
-        return self.score
+            outputs = self.rm(**inputs)
+            # print(outputs.logits.shape)
+            # print("logits:", outputs.logits)
+            scores = outputs.logits.squeeze()
+            # Handle both single and batch inputs
+            if scores.ndim == 0:
+                return scores.unsqueeze(0)
+            return scores
         
     def to(self, device):
         self.device = device
-        self.pipeline.model.to(device)
+        self.rm.to(device)
         return self     
 
 class estDPOStylePipeline:

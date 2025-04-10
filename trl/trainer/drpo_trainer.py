@@ -741,22 +741,22 @@ class DRPOTrainer(Trainer):
         # astar_attention_mask = astar_attention_mask.view(self.args.num_astar, batch_size, -1)
     
         logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
-        print("logps_star_sum: ", logps_star_sum)
+        # print("logps_star_sum: ", logps_star_sum)
 
         # per_token_ref_logps_star = per_token_ref_logps_star.view(self.args.num_astar, batch_size, -1)
         # ref_logps_star_sum = (ref_logps_star * astar_attention_mask).sum(-1).mean(0)
 
         # preference_score_star = preference_score_star.view(self.args.num_astar, -1)
-        print("preference_score_star: ", preference_score_star)
+        # print("preference_score_star: ", preference_score_star)
         loss2 = -(logps_star_sum * preference_score_star.clone().detach()).mean()
-        print("loss2: ", loss2)
+        # print("loss2: ", loss2)
 
         # Compute the penalty term of kl divergence
        
         # kl_offline_part = ((torch.exp(per_token_ref_logps - per_token_logps) - (per_token_ref_logps - per_token_logps) - 1)*astar_attention_mask).sum(-1)
         # kl_onpolicy_part = ((per_token_logps_star - per_token_ref_logps_star)*astar_attention_mask).sum(-1)
         kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
-        print("kl_onpolicy_part", kl_onpolicy_part)
+        # print("kl_onpolicy_part", kl_onpolicy_part)
         # print("kl_offline_part", kl_offline_part)
         # mean_kl = torch.stack((kl_onpolicy_part, kl_offline_part.unsqueeze(0)), dim=0).mean()
         # mean_kl = kl_offline_part.mean()
@@ -767,22 +767,22 @@ class DRPOTrainer(Trainer):
         # Compute the loss part one
         logps_sum = (per_token_logps * a1_attention_mask).sum(1)
         ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
-        print("pi, ref:",logps_sum, ref_logps_sum)
+        # print("pi, ref:",logps_sum, ref_logps_sum)
         
         
         if self.args.ratio_processing == "clip":
             ratio = torch.exp(logps_sum - ref_logps_sum)
-            print("ratio",ratio)
+            # print("ratio",ratio)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
             losses1 =  -clipped_ratio*(rank - preference_score.clone()).detach()
-            print("loss1", losses1.mean())
+            # print("loss1", losses1.mean())
         
         elif self.args.ratio_processing == "self_normalize":
-            print(torch.exp(logps_sum).mean())
-            print(torch.exp(ref_logps_sum).mean())
+            # print(torch.exp(logps_sum).mean())
+            # print(torch.exp(ref_logps_sum).mean())
             ratio_nominator = torch.exp(logps_sum) / torch.exp(logps_sum).mean()
             ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
-            print("ratio pi, ref:", ratio_nominator, ratio_denominator)
+            # print("ratio pi, ref:", ratio_nominator, ratio_denominator)
             ratio = ratio_nominator / ratio_denominator
             losses1 = -ratio * (rank - preference_score.clone()).detach()
 
@@ -846,7 +846,7 @@ class DRPOTrainer(Trainer):
 
         return loss.detach()
     
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None, learning_rate=None):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: dict[str, float] = {}
 
@@ -1001,7 +1001,6 @@ class DRPOTrainer(Trainer):
 
 
         
-
 
 
 
