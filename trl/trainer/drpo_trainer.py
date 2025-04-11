@@ -697,7 +697,9 @@ class DRPOTrainer(Trainer):
             prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
 
             prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+            print(prompt_astar[0])
             prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
+            print(prompt_a2[0])
             prompt_a2_repeated = prompt_a2 * self.args.num_astar
             assert(len(prompt_astar) == len(prompt_a2_repeated))
             # print("prompt_astar: ", prompt_astar)

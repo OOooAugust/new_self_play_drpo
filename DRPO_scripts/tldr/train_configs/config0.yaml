@@ -2,20 +2,20 @@ output_dir: ./output/tldr/0/
 
 gradient_checkpointing: false
 per_device_train_batch_size: 12
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 1
 learning_rate: 5.0e-7
-max_length: 512
-temperature: 1.0
-beta: 0.05
+max_length: 1024
+temperature: 0.9
+beta: 0.01
 bf16: true
 dataset_num_proc: 1
-num_astar: 5
+num_astar: 4
 torch_empty_cache_steps: 1
 num_train_epochs: 1
 eval_steps: 500
 push_to_hub: false
 save_strategy: "no"
-logging_steps: 100
+logging_steps: 5
 hub_model_id: kyleyee/EleutherAI_pythia-1b-deduped__drpo__tldr
 report_to: 
   - wandb
@@ -27,7 +27,7 @@ preference_model_kwargs:
   reverse: false
 ratio_processing: clip
 clipbound: 10.0
-forward_temperature: 1.0 
+forward_temperature: 0.9
 max_grad_norm: 0.25
 loss1_only: false
 loss2_only: false
