@@ -360,7 +360,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
 
     def __init__(
-        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 100000000
+        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 10000
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")

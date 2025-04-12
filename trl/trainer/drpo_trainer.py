@@ -776,7 +776,7 @@ class DRPOTrainer(Trainer):
             ratio = torch.exp(logps_sum - ref_logps_sum)
             # print("ratio",ratio)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-            losses1 =  -clipped_ratio*(rank - preference_score.clone()).detach()
+            losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
             # print("loss1", losses1.mean())
         
         elif self.args.ratio_processing == "self_normalize":
@@ -786,19 +786,19 @@ class DRPOTrainer(Trainer):
             ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
             # print("ratio pi, ref:", ratio_nominator, ratio_denominator)
             ratio = ratio_nominator / ratio_denominator
-            losses1 = -ratio * (rank - preference_score.clone()).detach()
+            losses1 = - ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
 
         else:
             ratio = torch.exp(logps_sum - ref_logps_sum)
             # losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
-            losses1 = -ratio * (rank - preference_score.clone()).detach()
+            losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
         
         if self.args.loss2_only:
             loss = loss2 + self.beta * mean_kl
             # print(losses2.mean(), mean_kl)
             # print(loss)
         elif self.args.loss1_only:
-            losses1 = -clipped_ratio * rank.detach()
+            losses1 = -clipped_ratio.detach() * rank.detach() * logps_sum
             loss = losses1.mean() + self.beta * mean_kl
         else:
             loss = losses1.mean() + loss2 + self.beta * mean_kl
