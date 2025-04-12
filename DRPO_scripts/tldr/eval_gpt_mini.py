@@ -1,3 +1,12 @@
+import sys
+import os
+
+import yaml
+
+# Add the parent directory to Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from trl import HfPairwiseJudge, OpenAIPairwiseJudge
 from datasets import load_dataset
 import pandas as pd
@@ -40,15 +49,15 @@ def evaluate_and_save(data, method_name, temp):
         
         return win_rate
 
-data = load_dataset("Kyleyee/train_data_tldr_SFT_dpo_drpo_multi_temp")
-temperatures = [0, 0.25, 0.5, 0.75, 1]
+data = load_dataset("Eehan/eval-tldr-dpo-drpo-0.9tmp-sft-1000")
+temperatures = [0, 0.3, 0.7]
 all_indices = list(range(1000)) 
 random.shuffle(all_indices)  
 num_samples_per_temp = len(all_indices) // len(data.keys())
 print(num_samples_per_temp)
 temp_indices = {
     temp: all_indices[i * num_samples_per_temp: (i + 1) * num_samples_per_temp]
-    for i, temp in enumerate([0, 0.25, 0.5, 0.75, 1])
+    for i, temp in enumerate(temperatures)
 }
 temperature_data = {
     temp: [data[f"temperature_{temp}"][i] for i in temp_indices[temp]]
@@ -59,8 +68,8 @@ for temp in temperatures:
     temp_data = temperature_data[temp]
     
     data_sft_dpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["dpo"]] for x in temp_data]}
-    data_dpo_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["dpo"], x["drpo"]] for x in temp_data]}
-    data_sft_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["drpo"]] for x in temp_data]}
+    data_dpo_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["dpo"], x["drpo-0.9tmp"]] for x in temp_data]}
+    data_sft_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["drpo-0.9tmp"]] for x in temp_data]}
     
 
     sft_dpo_win_rate = evaluate_and_save(data_sft_dpo, "sft_dpo", temp)
