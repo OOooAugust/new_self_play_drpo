@@ -20,7 +20,7 @@ def pipe(model_id):
     )
     return pipe, processing_class
 
-def extract_dialogue(examples: dict, temperature: float, kwargs:dict) -> dict:
+def extract_dialogue(examples: dict, temperature: float, pipes: dict, kwargs:dict) -> dict:
     prompts = examples["prompt"]
     prompt_list = []
     for text in prompts:
@@ -29,11 +29,10 @@ def extract_dialogue(examples: dict, temperature: float, kwargs:dict) -> dict:
         prompt_list.append(match.group(1).strip())
     
     for model_name, model_kwargs in kwargs.items():
-        kwargs
         kwargs[model_name]["do_sample"] = temperature > 0
         if temperature > 0:
             model_kwargs["temperature"] = temperature
-        generated = pipe(model_name, **model_kwargs)(prompts, **model_kwargs)
+        generated = pipes[model_name](prompts, **model_kwargs)
         examples[model_name] = [batch[0]["generated_text"] for batch in generated]
 
     return examples
@@ -56,7 +55,7 @@ def deduplicate_consecutive_dataset(dataset):
     return dataset.select(unique_indices)
 
 if __name__ == "__main__":
-    # 加载数据集
+    # Load dataset
     dataset = load_dataset("Kyleyee/train_data_tldr_for_drpo")["validation"]
 
 
@@ -66,37 +65,48 @@ if __name__ == "__main__":
 
     temperatures = [0, 0.3, 0.7]
 
+    # Initialize models and tokenizers
     dpo_pipe, dpo_tokenizer = pipe("Kyleyee/pythia-1b-deduped-tldr-dpo")
-    drpo_pipe, drpo_tokenizer = pipe("Eehan/pythia-1b-deduped-tldr-drpo-0.9tmp")
+    drpo_pipe, drpo_tokenizer = pipe("Eehan/pythia-1b-deduped-tldr-ppo-0.9tmp")
     sft_pipe, sft_tokenizer = pipe("trl-lib/pythia-1b-deduped-tldr-sft")
 
-    kwargs = {
-        "dpo": {
-            "max_new_tokens": 64,
-            "eos_token_id": dpo_tokenizer.eos_token_id,
-            "return_full_text": False,
-        },
-        "drpo-0.9tmp": {
-            "max_new_tokens": 64,
-            "eos_token_id": drpo_tokenizer.eos_token_id,
-            "return_full_text": False,
-        },
-        "sft": {
-            "max_new_tokens": 64,
-            "eos_token_id": sft_tokenizer.eos_token_id,
-            "return_full_text": False,
-        },
+    model_names = [
+        "dpo",
+        "drpo-0.9tmp",
+        "sft",
+    ]
+
+    # Create dictionaries for pipes and tokenizers
+    pipes = {
+        "dpo": dpo_pipe,
+        "drpo-0.9tmp": drpo_pipe,
+        "sft": sft_pipe,
     }
 
-    # 创建包含不同温度子集的DatasetDict
+    tokenizers = {
+        "dpo": dpo_tokenizer,
+        "drpo-0.9tmp": drpo_tokenizer,
+        "sft": sft_tokenizer,
+    }
+    
+    # Create kwargs dictionary
+    kwargs = {
+        model_name: {
+            "max_new_tokens": 64,
+            "eos_token_id": tokenizers[model_name].eos_token_id,
+            "return_full_text": False
+        } for model_name in model_names
+    }
+
+    # Process dataset
     processed = DatasetDict()
     for idx, temp in enumerate(temperatures):
         processed_shard = dataset.map(
             extract_dialogue,
-            fn_kwargs={"temperature": temp, "kwargs": kwargs},
+            fn_kwargs={"temperature": temp, "pipes": pipes, "kwargs": kwargs},
             batched=True,
             batch_size=64
         )
         processed[f"temperature_{temp}"] = processed_shard
 
-    processed.push_to_hub("Eehan/eval-tldr-dpo-drpo-0.9tmp-sft")
+    processed.push_to_hub("Eehan/eval-tldr-dpo-drpo-0.9tmp-sft-1000")
