@@ -21,7 +21,8 @@ import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
 from transformers.utils import is_openai_available
-
+import time
+import openai
 from ..import_utils import is_llm_blender_available
 
 
@@ -359,7 +360,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
 
     def __init__(
-        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 1_000
+        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 100000000
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
@@ -387,19 +388,33 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
             completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
 
         # Define a function to get the rank for a single prompt, will be called concurrently
+        
         def get_rank(prompt, candidates):
             content = self.system_prompt.format(prompt=prompt, response0=candidates[0], response1=candidates[1])
             messages = [{"role": "user", "content": content}]
-            completion = self.client.chat.completions.create(model=self.model, messages=messages, max_tokens=1)
-            response = completion.choices[0].message.content
-            if response in ["0", "1"]:
-                return int(response)
-            else:
-                logging.debug(f"Invalid response from the judge model: '{response}'. Returning -1.")
-                return -1
+            retries = 0
+            while retries < 6:  # maximum 10 retries
+                try:
+                    completion = self.client.chat.completions.create(
+                        model=self.model, messages=messages, max_tokens=1
+                    )
+                    response = completion.choices[0].message.content
+                    if response in ["0", "1"]:
+                        return int(response)
+                    else:
+                        logging.debug(f"Invalid response: '{response}'. Returning -1.")
+                        return -1
+                except openai.RateLimitError as err:
+                    wait_time = 0.2 * (2 ** retries)  
+                    logging.warning(f"Rate limit hit. Retrying in {wait_time:.2f} seconds...")
+                    time.sleep(wait_time)
+                    retries += 1
+            # If all retries fail, return -1
+            logging.warning(f"Failed to get a response. Returning -1.")
+            return -1
 
         # Call the completions concurrently
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             ranks = list(executor.map(get_rank, prompts, completions))
 
         # Flip back the ranks to the original order if needed
