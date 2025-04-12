@@ -38,11 +38,33 @@ def extract_dialogue(examples: dict, temperature: float, kwargs:dict) -> dict:
 
     return examples
 
+def deduplicate_consecutive_dataset(dataset):
+    """对连续重复的prompt进行去重"""
+    if len(dataset) <= 1:
+        return dataset
+        
+    unique_indices = [0]  # 第一个元素一定保留
+    prev_prompt = dataset[0]['prompt']
+    
+    # 只需要和前一个prompt比较
+    for i in range(1, len(dataset)):
+        current_prompt = dataset[i]['prompt']
+        if current_prompt != prev_prompt:
+            unique_indices.append(i)
+            prev_prompt = current_prompt
+    
+    return dataset.select(unique_indices)
+
 if __name__ == "__main__":
     # 加载数据集
     dataset = load_dataset("Kyleyee/train_data_tldr_for_drpo")["validation"]
+
+
     dataset = dataset.remove_columns(["rank", "a1", "a2"])
-    temperatures = [0, 0.5, 1]
+    dataset = deduplicate_consecutive_dataset(dataset)
+    dataset = dataset.select(range(1000))
+
+    temperatures = [0, 0.3, 0.7]
 
     dpo_pipe, dpo_tokenizer = pipe("Kyleyee/pythia-1b-deduped-tldr-dpo")
     drpo_pipe, drpo_tokenizer = pipe("Eehan/pythia-1b-deduped-tldr-drpo-0.9tmp")
@@ -69,8 +91,7 @@ if __name__ == "__main__":
     # 创建包含不同温度子集的DatasetDict
     processed = DatasetDict()
     for idx, temp in enumerate(temperatures):
-        data = dataset
-        processed_shard = data.map(
+        processed_shard = dataset.map(
             extract_dialogue,
             fn_kwargs={"temperature": temp, "kwargs": kwargs},
             batched=True,
