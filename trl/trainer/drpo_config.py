@@ -63,7 +63,7 @@ class DRPOConfig(TrainingArguments):
     )
 
     max_new_tokens: int = field(
-        default=64,
+        default=256,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     
@@ -76,7 +76,7 @@ class DRPOConfig(TrainingArguments):
         },
     )
 
-    temperature: float = field(
+    generate_temperature: float = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
