@@ -358,7 +358,7 @@ class DRPOTrainer(Trainer):
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
+            temperature=args.generate_temperature,
             top_k=50,
             top_p=1.0,
             do_sample=True,
