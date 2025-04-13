@@ -163,7 +163,7 @@ model_args = ModelConfig(
         model_name_or_path = model_id,
 )
 
-with open("./DRPO_scripts/tldr/train_configs/config0.yaml", "r") as f:
+with open("./DRPO_scripts/tldr/train_configs/config11.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(
