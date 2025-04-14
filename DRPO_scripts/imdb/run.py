@@ -69,7 +69,12 @@ def main(script_args, training_args, model_args):
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        print("Adding pad token")
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        model.resize_token_embeddings(len(tokenizer))
+    else:
+        print("Pad token already exists")
+
     # if tokenizer.chat_template is None:
     #     tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if script_args.ignore_bias_buffers:

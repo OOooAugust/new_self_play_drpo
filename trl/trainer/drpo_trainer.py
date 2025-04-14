@@ -603,6 +603,8 @@ class DRPOTrainer(Trainer):
     def _generate(self, model, prompt_ids: torch.tensor, prompt_attention_mask: torch.tensor, num_astar:int = 1):
         eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
+        print("eos_token_id: ", eos_token_id)
+        print("pad_token_id: ", pad_token_id)
         prompt_ids = prompt_ids.repeat(num_astar, 1)
         prompt_attention_mask = prompt_attention_mask.repeat(num_astar, 1)
         with unwrap_model_for_generation(model, self.accelerator, gather_deepspeed3_params=False) as unwrapped_model:
