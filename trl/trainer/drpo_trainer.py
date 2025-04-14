@@ -603,13 +603,6 @@ class DRPOTrainer(Trainer):
     def _generate(self, model, prompt_ids: torch.tensor, prompt_attention_mask: torch.tensor, num_astar:int = 1):
         eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
-
-        # inputs = [{"prompt": prompt} for prompt in prompts]
-        # inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        # inputs = [self.tokenize_row(x, self.processing_class) for x in inputs]
-        # inputs = self.data_collator(inputs)
-        
-        # inputs = self._prepare_inputs(inputs)
         prompt_ids = prompt_ids.repeat(num_astar, 1)
         prompt_attention_mask = prompt_attention_mask.repeat(num_astar, 1)
         with unwrap_model_for_generation(model, self.accelerator, gather_deepspeed3_params=False) as unwrapped_model:
@@ -628,9 +621,6 @@ class DRPOTrainer(Trainer):
     def _forward(self, model, prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask, temperature=1.0):
         # Get the number of tokens to truncate from prompt
         num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
-        # print("_forward, num_tokens_to_truncate: ",num_tokens_to_truncate)
-        # print("_forward, prompt_ids.shape: ",prompt_ids.shape)
-        # print("_forward, completion_ids.shape: ",completion_ids.shape)
 
         # Truncate left to avoid oom
         prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
@@ -720,12 +710,9 @@ class DRPOTrainer(Trainer):
             if not self.precompute_preference_score:
                 # g(y, y', x)            
                 prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
-                prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
-
                 prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
                 assert(len(prompt_a1) == len(prompt_a2))
                 
-
                 preference_score = get_preference_score(
                     self.preference_model, 
                     prompt_a1, 
@@ -736,6 +723,8 @@ class DRPOTrainer(Trainer):
             else:
                 # preference_score = inputs["preference_score"]
                 raise NotImplementedError("precompute_preference_score is not implemented yet.")
+            
+            del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
 
         # Compute the loss part two
         assert per_token_logps_star.size(0) == batch_size * self.args.num_astar

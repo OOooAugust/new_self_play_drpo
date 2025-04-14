@@ -139,7 +139,7 @@ class DRPOConfig(TrainingArguments):
         metadata={"help": "Maximum length of the prompt."},
     )
     max_completion_length: Optional[int] = field(
-        default=None,
+        default=256,
         metadata={"help": "Maximum length of the completion."},
     )
 
