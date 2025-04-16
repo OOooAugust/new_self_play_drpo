@@ -56,7 +56,7 @@ from .utils import (
     truncate_right,
     prepare_deepspeed,
 )
-from .drpo_utils import get_preference_score
+from .drpo_utils import get_preference_score, get_preference_score_without_decoding
 
 
 # if is_peft_available():
@@ -603,8 +603,6 @@ class DRPOTrainer(Trainer):
     def _generate(self, model, prompt_ids: torch.tensor, prompt_attention_mask: torch.tensor, num_astar:int = 1):
         eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
-        print("eos_token_id: ", eos_token_id)
-        print("pad_token_id: ", pad_token_id)
         prompt_ids = prompt_ids.repeat(num_astar, 1)
         prompt_attention_mask = prompt_attention_mask.repeat(num_astar, 1)
         with unwrap_model_for_generation(model, self.accelerator, gather_deepspeed3_params=False) as unwrapped_model:
@@ -649,150 +647,215 @@ class DRPOTrainer(Trainer):
     
     def training_step(self, model:nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
         model.train()
-        batch_size = inputs["prompt_ids"].size(0)
 
-        prompt_ids = inputs["prompt_ids"]
-        prompt_attention_mask = inputs["prompt_attention_mask"]
-        a1_ids = inputs["a1_ids"]
-        a1_attention_mask = inputs["a1_attention_mask"]
-        a2_ids = inputs["a2_ids"]
-        a2_attention_mask = inputs["a2_attention_mask"]
-        rank = inputs["rank"].float()
-        # print("rank: ", rank)
+        if self.args.model_and_preference_share_basemodel:
+            batch_size = inputs["prompt_ids"].size(0)
+            prompt_ids = inputs["prompt_ids"]
+            prompt_attention_mask = inputs["prompt_attention_mask"]
+            a1_ids = inputs["a1_ids"]
+            a1_attention_mask = inputs["a1_attention_mask"]
+            a2_ids = inputs["a2_ids"]
+            a2_attention_mask = inputs["a2_attention_mask"]
+            rank = inputs["rank"].float()
 
-        # log pi(y|x) shape(batch_size, 1)
-        per_token_logps = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+            per_token_logps = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+            prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(model, prompt_ids, prompt_attention_mask, self.args.num_astar)
+            contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
 
-        # sample y* for `num_astar` times
-        prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(model, prompt_ids, prompt_attention_mask, self.args.num_astar)
-        contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
+            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
 
-        # log pi(y*|x) shape(num_astar*batch_size, 1)
-        per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
-
-
-        with torch.no_grad():
-            if self.ref_model is not None:
-                # log pi_ref(y|x)
+            with torch.no_grad():
                 per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
-                per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
-            else:
-                raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
+                per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
 
-        # device = logps.device
-
-        # Compute preference score g(y*, y', x) and g(y, y', x)
-        with torch.inference_mode():
-            # context_length = prompt_ids.size(1)
-
-            prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
-            prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
-
-            prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
-            print(prompt_astar[0])
-            prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
-            print(prompt_a2[0])
-            prompt_a2_repeated = prompt_a2 * self.args.num_astar
-            assert(len(prompt_astar) == len(prompt_a2_repeated))
-            # print("prompt_astar: ", prompt_astar)
-            
-            # g(y*, y', x)
-            preference_score_star= get_preference_score(
-                self.preference_model, 
-                prompt_astar, 
-                prompt_a2_repeated,
-                is_bt_model = self.args.is_bt_model,
-                kwargs=self.args.preference_model_kwargs or {}
-            )
-            
-            if self.args.missing_eos_penalty is not None:
-                preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
-
-            
-            if not self.precompute_preference_score:
-                # g(y, y', x)            
+                # Compute preference score g(y*, y', x) and g(y, y', x)
+            with torch.inference_mode():
+                prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
+                prompt_astar_attention_mask = torch.cat((prompt_attention_mask_repeated, astar_attention_mask), dim=1)
+                prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
+                prompt_a2_attention_mask = torch.cat((prompt_attention_mask, a2_attention_mask), dim=1)
+                prompt_a2_repeated_ids = prompt_a2_ids.repeat(self.args.num_astar, 1)
+                prompt_a2_repeated_attention_mask = prompt_a2_attention_mask.repeat(self.args.num_astar, 1)
                 prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
-                prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
-                assert(len(prompt_a1) == len(prompt_a2))
-                
-                preference_score = get_preference_score(
+                prompt_a1_attention_mask = torch.cat((prompt_attention_mask, a1_attention_mask), dim=1)
+                # TODO: get_preference_score_without_decoding
+                preference_score_star = get_preference_score_without_decoding(
                     self.preference_model, 
-                    prompt_a1, 
-                    prompt_a2,
+                    prompt_astar_ids,
+                    prompt_astar_attention_mask, 
+                    prompt_a2_repeated_ids,
+                    prompt_a2_repeated_attention_mask,
                     is_bt_model = self.args.is_bt_model,
-                    kwargs = self.args.preference_model_kwargs or {}
+                    kwargs=self.args.preference_model_kwargs or {}
                 )
-            else:
-                # preference_score = inputs["preference_score"]
-                raise NotImplementedError("precompute_preference_score is not implemented yet.")
+
+                if self.args.missing_eos_penalty is not None:
+                    preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
+                
+                preference_score = get_preference_score_without_decoding(
+                    self.preference_model, 
+                    prompt_a1_ids,
+                    prompt_a1_attention_mask,
+                    prompt_a2_ids,
+                    prompt_a2_attention_mask,
+                    is_bt_model = self.args.is_bt_model,
+                    kwargs=self.args.preference_model_kwargs or {}
+                )
             
-            del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
+            del (prompt_astar_ids, prompt_a2_ids, prompt_a1_ids, prompt_ids, a1_ids, 
+                 a2_ids, prompt_ids_repeated, astar_ids, prompt_a2_repeated_ids,
+                 prompt_astar_attention_mask, prompt_a2_attention_mask, prompt_a1_attention_mask)
 
-        # Compute the loss part two
-        assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
-        # per_token_logps_star = per_token_logps_star.view(self.args.num_astar, batch_size, -1)
-        # astar_attention_mask = astar_attention_mask.view(self.args.num_astar, batch_size, -1)
-    
-        logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
-        # print("logps_star_sum: ", logps_star_sum)
-
-        # per_token_ref_logps_star = per_token_ref_logps_star.view(self.args.num_astar, batch_size, -1)
-        # ref_logps_star_sum = (ref_logps_star * astar_attention_mask).sum(-1).mean(0)
-
-        # preference_score_star = preference_score_star.view(self.args.num_astar, -1)
-        # print("preference_score_star: ", preference_score_star)
-        loss2 = -(logps_star_sum * preference_score_star.clone().detach()).mean()
-        # print("loss2: ", loss2)
-
-        # Compute the penalty term of kl divergence
-       
-        # kl_offline_part = ((torch.exp(per_token_ref_logps - per_token_logps) - (per_token_ref_logps - per_token_logps) - 1)*astar_attention_mask).sum(-1)
-        # kl_onpolicy_part = ((per_token_logps_star - per_token_ref_logps_star)*astar_attention_mask).sum(-1)
-        kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
-        # print("kl_onpolicy_part", kl_onpolicy_part)
-        # print("kl_offline_part", kl_offline_part)
-        # mean_kl = torch.stack((kl_onpolicy_part, kl_offline_part.unsqueeze(0)), dim=0).mean()
-        # mean_kl = kl_offline_part.mean()
-        mean_kl = kl_onpolicy_part.mean()
-
-
-
-        # Compute the loss part one
-        logps_sum = (per_token_logps * a1_attention_mask).sum(1)
-        ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
-        # print("pi, ref:",logps_sum, ref_logps_sum)
-        
-        
-        if self.args.ratio_processing == "clip":
+            logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
+            logps_sum = (per_token_logps * a1_attention_mask).sum(1)
+            ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
+            # print("pi, ref:",logps_sum, ref_logps_sum)
+            loss2 = -(logps_star_sum * preference_score.clone().detach()).mean()
             ratio = torch.exp(logps_sum - ref_logps_sum)
-            # print("ratio",ratio)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-            losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
-            # print("loss1", losses1.mean())
-        
-        elif self.args.ratio_processing == "self_normalize":
-            # print(torch.exp(logps_sum).mean())
-            # print(torch.exp(ref_logps_sum).mean())
-            ratio_nominator = torch.exp(logps_sum) / torch.exp(logps_sum).mean()
-            ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
-            # print("ratio pi, ref:", ratio_nominator, ratio_denominator)
-            ratio = ratio_nominator / ratio_denominator
-            losses1 = - ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+            losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+
+            # compute kl divergence
+            kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
+            mean_kl = kl_onpolicy_part.mean()
+
+            loss = losses1.mean() + loss2 + self.beta * mean_kl
 
         else:
-            ratio = torch.exp(logps_sum - ref_logps_sum)
-            # losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
-            losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+            batch_size = inputs["prompt_ids"].size(0)
+            prompt_ids = inputs["prompt_ids"]
+            prompt_attention_mask = inputs["prompt_attention_mask"]
+            a1_ids = inputs["a1_ids"]
+            a1_attention_mask = inputs["a1_attention_mask"]
+            a2_ids = inputs["a2_ids"]
+            a2_attention_mask = inputs["a2_attention_mask"]
+            rank = inputs["rank"].float()
+            # print("rank: ", rank)
+
+            # log pi(y|x) shape(batch_size, 1)
+            per_token_logps = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+
+            # sample y* for `num_astar` times
+            prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(model, prompt_ids, prompt_attention_mask, self.args.num_astar)
+            contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
+
+            # log pi(y*|x) shape(num_astar*batch_size, 1)
+            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
+
+
+            with torch.no_grad():
+                if self.ref_model is not None:
+                    # log pi_ref(y|x)
+                    per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+                    per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+                else:
+                    raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
+
+            # device = logps.device
+
+            # Compute preference score g(y*, y', x) and g(y, y', x)
+            with torch.inference_mode():
+                # context_length = prompt_ids.size(1)
+
+                prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
+                prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
+
+                prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+                print(prompt_astar[0])
+                prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
+                print(prompt_a2[0])
+                prompt_a2_repeated = prompt_a2 * self.args.num_astar
+                assert(len(prompt_astar) == len(prompt_a2_repeated))
+                # print("prompt_astar: ", prompt_astar)
+                
+                # g(y*, y', x)
+                preference_score_star= get_preference_score(
+                    self.preference_model, 
+                    prompt_astar, 
+                    prompt_a2_repeated,
+                    is_bt_model = self.args.is_bt_model,
+                    kwargs=self.args.preference_model_kwargs or {}
+                )
+                
+                if self.args.missing_eos_penalty is not None:
+                    preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
+
+                
+                if not self.precompute_preference_score:
+                    # g(y, y', x)            
+                    prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
+                    prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
+                    assert(len(prompt_a1) == len(prompt_a2))
+                    
+                    preference_score = get_preference_score(
+                        self.preference_model, 
+                        prompt_a1, 
+                        prompt_a2,
+                        is_bt_model = self.args.is_bt_model,
+                        kwargs = self.args.preference_model_kwargs or {}
+                    )
+                else:
+                    # preference_score = inputs["preference_score"]
+                    raise NotImplementedError("precompute_preference_score is not implemented yet.")
+                
+                del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
+
+            # Compute the loss part two
+            assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
         
-        if self.args.loss2_only:
-            loss = loss2 + self.beta * mean_kl
-            # print(losses2.mean(), mean_kl)
-            # print(loss)
-        elif self.args.loss1_only:
-            losses1 = -clipped_ratio.detach() * rank.detach() * logps_sum
-            loss = losses1.mean() + self.beta * mean_kl
-        else:
-            loss = losses1.mean() + loss2 + self.beta * mean_kl
+            logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
+            loss2 = -(logps_star_sum * preference_score_star.clone().detach()).mean()
+            # print("loss2: ", loss2)
+
+            # Compute the penalty term of kl divergence
+        
+            # kl_offline_part = ((torch.exp(per_token_ref_logps - per_token_logps) - (per_token_ref_logps - per_token_logps) - 1)*astar_attention_mask).sum(-1)
+            # kl_onpolicy_part = ((per_token_logps_star - per_token_ref_logps_star)*astar_attention_mask).sum(-1)
+            kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
+            # print("kl_onpolicy_part", kl_onpolicy_part)
+            # print("kl_offline_part", kl_offline_part)
+            # mean_kl = torch.stack((kl_onpolicy_part, kl_offline_part.unsqueeze(0)), dim=0).mean()
+            # mean_kl = kl_offline_part.mean()
+            mean_kl = kl_onpolicy_part.mean()
+
+
+
+            # Compute the loss part one
+            logps_sum = (per_token_logps * a1_attention_mask).sum(1)
+            ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
+            # print("pi, ref:",logps_sum, ref_logps_sum)
+            
+            
+            if self.args.ratio_processing == "clip":
+                ratio = torch.exp(logps_sum - ref_logps_sum)
+                # print("ratio",ratio)
+                clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
+                losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+                # print("loss1", losses1.mean())
+            
+            elif self.args.ratio_processing == "self_normalize":
+                # print(torch.exp(logps_sum).mean())
+                # print(torch.exp(ref_logps_sum).mean())
+                ratio_nominator = torch.exp(logps_sum) / torch.exp(logps_sum).mean()
+                ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
+                # print("ratio pi, ref:", ratio_nominator, ratio_denominator)
+                ratio = ratio_nominator / ratio_denominator
+                losses1 = - ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+
+            else:
+                ratio = torch.exp(logps_sum - ref_logps_sum)
+                # losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
+                losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+            
+            if self.args.loss2_only:
+                loss = loss2 + self.beta * mean_kl
+                # print(losses2.mean(), mean_kl)
+                # print(loss)
+            elif self.args.loss1_only:
+                losses1 = -clipped_ratio.detach() * rank.detach() * logps_sum
+                loss = losses1.mean() + self.beta * mean_kl
+            else:
+                loss = losses1.mean() + loss2 + self.beta * mean_kl
             
 
         # log everything

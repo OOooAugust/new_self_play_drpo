@@ -267,6 +267,11 @@ class BTwithRewardPipeline:
             num_labels=1,
         )
         self.rm_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        print("======================\n preference model config\n==============")
+        print(self.rm.config)
+        print(self.rm_tokenizer.all_special_tokens)
+        print(self.rm_tokenizer.all_special_ids)
+        print(self.rm_tokenizer.convert_ids_to_tokens(1000))
         
         # Ensure padding token is properly set for both tokenizer and model config
         if self.rm_tokenizer.pad_token is None:
@@ -282,7 +287,7 @@ class BTwithRewardPipeline:
     def __call__(self, input_text: List[str]):
         if isinstance(input_text, str):
             input_text = [input_text]
-            
+        
         encoded_inputs = self.rm_tokenizer(
             input_text,
             padding=True,
@@ -294,6 +299,7 @@ class BTwithRewardPipeline:
         
         # Move tensors to the correct device
         inputs = {k: v.to(self.rm.device) for k, v in encoded_inputs.items()}
+        # print("inputs:", inputs)
         
         with torch.no_grad():
             outputs = self.rm(**inputs)
@@ -371,3 +377,66 @@ class estDPOStylePipeline:
         self.policy.to(device)
         self.reference.to(device)
         return self
+
+
+def get_preference_score_without_decoding(preference_model, a1_iuput, a1_attention_mask, a2_input, a2_attention_mask, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
+    if kwargs.get("indifferent", False):
+        # return torch.zeros(len(a_1_iuput)).to(device)
+        return 0.5*torch.ones(len(a1_iuput)).to(device)
+    if kwargs.get("random", False):
+        # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
+        return torch.rand(len(a1_iuput)).to(device)
+    a_1_reward = preference_model(a1_iuput, a1_attention_mask)
+    a_2_reward = preference_model(a2_input, a2_attention_mask)
+    if is_bt_model:
+        result = a_1_reward - a_2_reward
+    else:
+        if preference_model.value_head_dim == 2:
+            result = a_1_reward[:, 0] * a_2_reward[:, 1] - a_1_reward[:, 1] * a_2_reward[:, 0]
+        else:
+            R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a_1_reward.device, dtype=a_1_reward.dtype)
+            for i in range(0, preference_model.value_head_dim, 2):
+                R_matrix[i, i+1] = -1 
+                R_matrix[i+1, i] = 1   
+            if a_1_reward.device == a_2_reward.device == R_matrix.device:
+                transformed_a_1 = torch.matmul(a_1_reward, R_matrix.T)
+                result = torch.bmm(transformed_a_1.view(a_1_reward.shape[0], 1, preference_model.value_head_dim), a_2_reward.view(a_2_reward.shape[0], preference_model.value_head_dim, 1))
+                result = result.view(a_1_reward.shape[0])  
+    p = F.sigmoid(result)
+    if kwargs.get("reverse", False):
+        print("Attention: reverse the preference score is using")
+        p = 1 - p
+    # return p - 0.5 * torch.ones(len(a_1_iuput)).to(device)
+    return p
+
+
+
+class BTRewardNetwork(nn.Module):
+    def __init__(self, model_name_or_path: str, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), pad_token_id: Optional[int]=None):
+        super().__init__()
+        self.rm = AutoModelForSequenceClassification.from_pretrained(
+            model_name_or_path,
+            torch_dtype=torch.bfloat16,
+            device_map=device,
+            attn_implementation="flash_attention_2",
+            num_labels=1,
+        )
+        if pad_token_id is not None:
+            self.rm.config.pad_token_id = pad_token_id
+        
+        # print(self.rm.config)
+        self.to(device)
+
+    def forward(self, input_ids, attention_mask):
+        with torch.no_grad():
+            outputs = self.rm(input_ids=input_ids, attention_mask=attention_mask)
+            scores = outputs.logits.squeeze(0)
+            if scores.ndim == 0:
+                scores = scores.unsqueeze(0)
+            return scores
+        
+    def to(self, device):
+        self.device = device
+        self.rm.to(device)
+        return self
+    

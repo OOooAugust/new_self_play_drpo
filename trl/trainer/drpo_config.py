@@ -48,6 +48,11 @@ class DRPOConfig(TrainingArguments):
         }
     )
 
+    model_and_preference_share_basemodel: bool = field(
+        default=False,
+        metadata={"help": "Whether the model and preference model share the same base model (e.g. both from Qwen2.5 or Pythia...)"},
+    )
+
     preference_model_path: Optional[str] = field(
         default=None,
         metadata={
