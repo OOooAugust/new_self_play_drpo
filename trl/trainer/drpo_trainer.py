@@ -435,7 +435,8 @@ class DRPOTrainer(Trainer):
                      processing_class: PreTrainedTokenizerBase, 
                      max_prompt_length: Union[int, None] = None, 
                      max_completion_length: Union[int, None] = None, 
-                     add_special_tokens: bool = True) -> dict[str, Any]:
+                     add_special_tokens_for_prompt: bool = True,
+                     eos_after_completion: bool = True) -> dict[str, Any]:
         """Tokenize a row of data."""
         # FIXME: the logic of whether to add special tokens is not clear
         # FIXME: whether to add attention mask is not clear
@@ -445,15 +446,16 @@ class DRPOTrainer(Trainer):
         a2_ids = processing_class(feature["a2"], add_special_tokens=False)["input_ids"]
 
         # add speical tokens
-        if add_special_tokens:
+        if add_special_tokens_for_prompt:
             if processing_class.bos_token_id is not None:
                 prompt_ids = [processing_class.bos_token_id] + prompt_ids
             if processing_class.eos_token_id is not None:
                 prompt_ids = prompt_ids + [processing_class.eos_token_id]
         
         # 2 completions must add eos token to avoid non-stopping generation
-        a1_ids = a1_ids + [processing_class.eos_token_id]
-        a2_ids = a2_ids + [processing_class.eos_token_id]
+        if eos_after_completion and processing_class.eos_token_id is not None:
+            a1_ids = a1_ids + [processing_class.eos_token_id]
+            a2_ids = a2_ids + [processing_class.eos_token_id]
 
         # truncation
         if max_prompt_length is not None:
@@ -499,7 +501,8 @@ class DRPOTrainer(Trainer):
                     "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
-                    "add_special_tokens": False,
+                    "add_special_tokens_for_prompt": False,
+                    "eos_after_completion": args.model_and_preference_share_basemodel
                 },
                 **map_kwargs,
             )
@@ -678,7 +681,11 @@ class DRPOTrainer(Trainer):
                 prompt_a2_repeated_attention_mask = prompt_a2_attention_mask.repeat(self.args.num_astar, 1)
                 prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
                 prompt_a1_attention_mask = torch.cat((prompt_attention_mask, a1_attention_mask), dim=1)
-                # TODO: get_preference_score_without_decoding
+
+                # print("prompt_astar_ids: ", prompt_astar_ids)
+                # print("prompt_astar_attention_mask: ", prompt_astar_attention_mask)
+                # print("prompt_a2_repeated_ids: ", prompt_a2_repeated_ids)
+                # print("prompt_a2_repeated_attention_mask: ", prompt_a2_repeated_attention_mask)
                 preference_score_star = get_preference_score_without_decoding(
                     self.preference_model, 
                     prompt_astar_ids,
@@ -692,6 +699,10 @@ class DRPOTrainer(Trainer):
                 if self.args.missing_eos_penalty is not None:
                     preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
                 
+                # print("prompt_a1_ids: ", prompt_a1_ids)
+                # print("prompt_a1_attention_mask: ", prompt_a1_attention_mask)
+                # print("prompt_a2_ids: ", prompt_a2_ids)
+                # print("prompt_a2_attention_mask: ", prompt_a2_attention_mask)
                 preference_score = get_preference_score_without_decoding(
                     self.preference_model, 
                     prompt_a1_ids,
@@ -701,19 +712,22 @@ class DRPOTrainer(Trainer):
                     is_bt_model = self.args.is_bt_model,
                     kwargs=self.args.preference_model_kwargs or {}
                 )
+
+                # print("preference_score_star: ", preference_score_star.shape, preference_score_star)
+                # print("preference_score: ", preference_score.shape, preference_score)
             
             del (prompt_astar_ids, prompt_a2_ids, prompt_a1_ids, prompt_ids, a1_ids, 
                  a2_ids, prompt_ids_repeated, astar_ids, prompt_a2_repeated_ids,
                  prompt_astar_attention_mask, prompt_a2_attention_mask, prompt_a1_attention_mask)
 
-            logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
-            logps_sum = (per_token_logps * a1_attention_mask).sum(1)
-            ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
+            logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
+            logps = (per_token_logps * a1_attention_mask).sum(1)
+            ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
             # print("pi, ref:",logps_sum, ref_logps_sum)
-            loss2 = -(logps_star_sum * preference_score.clone().detach()).mean()
-            ratio = torch.exp(logps_sum - ref_logps_sum)
+            loss2 = -(logps_star * preference_score_star.clone().detach()).mean()
+            ratio = torch.exp(logps - ref_logps)
             clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-            losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+            losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
 
             # compute kl divergence
             kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
@@ -760,10 +774,10 @@ class DRPOTrainer(Trainer):
                 prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
                 prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
 
-                prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
-                print(prompt_astar[0])
-                prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
-                print(prompt_a2[0])
+                prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=False)
+                print("prompt_aster:", prompt_astar[0])
+                prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=False)
+                print("prompt_a2:",prompt_a2[0])
                 prompt_a2_repeated = prompt_a2 * self.args.num_astar
                 assert(len(prompt_astar) == len(prompt_a2_repeated))
                 # print("prompt_astar: ", prompt_astar)
@@ -784,7 +798,7 @@ class DRPOTrainer(Trainer):
                 if not self.precompute_preference_score:
                     # g(y, y', x)            
                     prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
-                    prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
+                    prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=False)
                     assert(len(prompt_a1) == len(prompt_a2))
                     
                     preference_score = get_preference_score(
@@ -798,13 +812,16 @@ class DRPOTrainer(Trainer):
                     # preference_score = inputs["preference_score"]
                     raise NotImplementedError("precompute_preference_score is not implemented yet.")
                 
+                print("preference_score_star: ", preference_score_star.shape, preference_score_star)
+                print("preference_score: ", preference_score.shape, preference_score)
+                
                 del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
 
             # Compute the loss part two
             assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
         
-            logps_star_sum = (per_token_logps_star * astar_attention_mask).sum(-1)
-            loss2 = -(logps_star_sum * preference_score_star.clone().detach()).mean()
+            logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
+            loss2 = -(logps_star * preference_score_star.clone().detach()).mean()
             # print("loss2: ", loss2)
 
             # Compute the penalty term of kl divergence
@@ -821,48 +838,48 @@ class DRPOTrainer(Trainer):
 
 
             # Compute the loss part one
-            logps_sum = (per_token_logps * a1_attention_mask).sum(1)
-            ref_logps_sum = (per_token_ref_logps * a1_attention_mask).sum(1)
+            logps = (per_token_logps * a1_attention_mask).sum(1)
+            ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
             # print("pi, ref:",logps_sum, ref_logps_sum)
             
             
             if self.args.ratio_processing == "clip":
-                ratio = torch.exp(logps_sum - ref_logps_sum)
+                ratio = torch.exp(logps - ref_logps)
                 # print("ratio",ratio)
                 clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-                losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+                losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
                 # print("loss1", losses1.mean())
             
             elif self.args.ratio_processing == "self_normalize":
                 # print(torch.exp(logps_sum).mean())
                 # print(torch.exp(ref_logps_sum).mean())
-                ratio_nominator = torch.exp(logps_sum) / torch.exp(logps_sum).mean()
-                ratio_denominator = torch.exp(ref_logps_sum) / torch.exp(ref_logps_sum).mean()
+                ratio_nominator = torch.exp(logps) / torch.exp(logps).mean()
+                ratio_denominator = torch.exp(ref_logps) / torch.exp(ref_logps).mean()
                 # print("ratio pi, ref:", ratio_nominator, ratio_denominator)
                 ratio = ratio_nominator / ratio_denominator
-                losses1 = - ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+                losses1 = - ratio.detach() * (rank - preference_score.clone()).detach() * logps
 
             else:
-                ratio = torch.exp(logps_sum - ref_logps_sum)
+                ratio = torch.exp(logps - ref_logps)
                 # losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
-                losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps_sum
+                losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps
             
             if self.args.loss2_only:
                 loss = loss2 + self.beta * mean_kl
                 # print(losses2.mean(), mean_kl)
                 # print(loss)
             elif self.args.loss1_only:
-                losses1 = -clipped_ratio.detach() * rank.detach() * logps_sum
+                losses1 = -clipped_ratio.detach() * rank.detach() * logps
                 loss = losses1.mean() + self.beta * mean_kl
             else:
                 loss = losses1.mean() + loss2 + self.beta * mean_kl
             
 
         # log everything
-        self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps_sum).mean().item())
-        self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star_sum).mean().item())
-        self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logps_sum).mean().item())
-        self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star).sum(-1).mean().item())
+        self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps).mean().item())
+        self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star).mean().item())
+        self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logps).mean().item())
+        self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star*astar_attention_mask).sum(-1).mean().item())
         self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
         self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)

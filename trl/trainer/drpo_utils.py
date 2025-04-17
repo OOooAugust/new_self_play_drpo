@@ -217,22 +217,24 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     if kwargs.get("random", False):
         # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
         return torch.rand(len(a_1_iuput)).to(device)
-    a_1_reward = preference_model(a_1_iuput)
-    a_2_reward = preference_model(a_2_input)
+    a1_reward = preference_model(a_1_iuput)
+    a2_reward = preference_model(a_2_input)
+    print("a1_reward:", a1_reward.shape, a1_reward)
+    print("a2_reward:", a2_reward.shape, a2_reward)
     if is_bt_model:
-        result = a_1_reward - a_2_reward
+        result = a1_reward - a2_reward
     else:
         if preference_model.value_head_dim == 2:
-            result = a_1_reward[:, 0] * a_2_reward[:, 1] - a_1_reward[:, 1] * a_2_reward[:, 0]
+            result = a1_reward[:, 0] * a2_reward[:, 1] - a1_reward[:, 1] * a2_reward[:, 0]
         else:
-            R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a_1_reward.device, dtype=a_1_reward.dtype)
+            R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a1_reward.device, dtype=a1_reward.dtype)
             for i in range(0, preference_model.value_head_dim, 2):
                 R_matrix[i, i+1] = -1 
                 R_matrix[i+1, i] = 1   
-            if a_1_reward.device == a_2_reward.device == R_matrix.device:
-                transformed_a_1 = torch.matmul(a_1_reward, R_matrix.T)
-                result = torch.bmm(transformed_a_1.view(a_1_reward.shape[0], 1, preference_model.value_head_dim), a_2_reward.view(a_2_reward.shape[0], preference_model.value_head_dim, 1))
-                result = result.view(a_1_reward.shape[0])  
+            if a1_reward.device == a2_reward.device == R_matrix.device:
+                transformed_a_1 = torch.matmul(a1_reward, R_matrix.T)
+                result = torch.bmm(transformed_a_1.view(a1_reward.shape[0], 1, preference_model.value_head_dim), a2_reward.view(a2_reward.shape[0], preference_model.value_head_dim, 1))
+                result = result.view(a1_reward.shape[0])  
     p = F.sigmoid(result)
     if kwargs.get("reverse", False):
         print("Attention: reverse the preference score is using")
@@ -258,20 +260,20 @@ class BTPipeline:
         return self 
 
 class BTwithRewardPipeline:
-    def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=False, padding: bool=True):
+    def __init__(self, reward_model_id, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=False, padding: bool=True):
         self.rm = AutoModelForSequenceClassification.from_pretrained(
-            model_name_or_path,
+            reward_model_id,
             torch_dtype=torch.bfloat16,
             device_map=device,
             attn_implementation="flash_attention_2",
             num_labels=1,
         )
         self.rm_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        print("======================\n preference model config\n==============")
-        print(self.rm.config)
-        print(self.rm_tokenizer.all_special_tokens)
-        print(self.rm_tokenizer.all_special_ids)
-        print(self.rm_tokenizer.convert_ids_to_tokens(1000))
+        # print("======================\n preference model config\n==============")
+        # print(self.rm.config)
+        # print(self.rm_tokenizer.all_special_tokens)
+        # print(self.rm_tokenizer.all_special_ids)
+        # print(self.rm_tokenizer.convert_ids_to_tokens(1000))
         
         # Ensure padding token is properly set for both tokenizer and model config
         if self.rm_tokenizer.pad_token is None:
@@ -288,24 +290,20 @@ class BTwithRewardPipeline:
         if isinstance(input_text, str):
             input_text = [input_text]
         
-        encoded_inputs = self.rm_tokenizer(
+        inputs = self.rm_tokenizer(
             input_text,
-            padding=True,
+            padding=self.padding,
             truncation=self.truncation,
             return_tensors="pt",
             add_special_tokens=True,
             return_attention_mask=True
         )
-        
-        # Move tensors to the correct device
-        inputs = {k: v.to(self.rm.device) for k, v in encoded_inputs.items()}
-        # print("inputs:", inputs)
+
+        inputs = {k: v.to(self.device, non_blocking=True) for k, v in inputs.items()}
         
         with torch.no_grad():
-            outputs = self.rm(**inputs)
-            # print(outputs.logits.shape)
-            # print("logits:", outputs.logits)
-            scores = outputs.logits.squeeze()
+            output = self.rm(**inputs)
+            scores = output.logits.squeeze()
             # Handle both single and batch inputs
             if scores.ndim == 0:
                 return scores.unsqueeze(0)
@@ -386,25 +384,27 @@ def get_preference_score_without_decoding(preference_model, a1_iuput, a1_attenti
     if kwargs.get("random", False):
         # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
         return torch.rand(len(a1_iuput)).to(device)
-    a_1_reward = preference_model(a1_iuput, a1_attention_mask)
-    a_2_reward = preference_model(a2_input, a2_attention_mask)
+    a1_reward = preference_model(a1_iuput, a1_attention_mask)
+    a2_reward = preference_model(a2_input, a2_attention_mask)
+    # print("a1_reward:", a1_reward.shape, a1_reward)
+    # print("a2_reward:", a2_reward.shape, a2_reward)
     if is_bt_model:
-        result = a_1_reward - a_2_reward
+        result = a1_reward - a2_reward
     else:
         if preference_model.value_head_dim == 2:
-            result = a_1_reward[:, 0] * a_2_reward[:, 1] - a_1_reward[:, 1] * a_2_reward[:, 0]
+            result = a1_reward[:, 0] * a2_reward[:, 1] - a1_reward[:, 1] * a2_reward[:, 0]
         else:
-            R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a_1_reward.device, dtype=a_1_reward.dtype)
+            R_matrix = torch.zeros((preference_model.value_head_dim, preference_model.value_head_dim), device=a1_reward.device, dtype=a1_reward.dtype)
             for i in range(0, preference_model.value_head_dim, 2):
                 R_matrix[i, i+1] = -1 
                 R_matrix[i+1, i] = 1   
-            if a_1_reward.device == a_2_reward.device == R_matrix.device:
-                transformed_a_1 = torch.matmul(a_1_reward, R_matrix.T)
-                result = torch.bmm(transformed_a_1.view(a_1_reward.shape[0], 1, preference_model.value_head_dim), a_2_reward.view(a_2_reward.shape[0], preference_model.value_head_dim, 1))
-                result = result.view(a_1_reward.shape[0])  
+            if a1_reward.device == a2_reward.device == R_matrix.device:
+                transformed_a_1 = torch.matmul(a1_reward, R_matrix.T)
+                result = torch.bmm(transformed_a_1.view(a1_reward.shape[0], 1, preference_model.value_head_dim), a2_reward.view(a2_reward.shape[0], preference_model.value_head_dim, 1))
+                result = result.view(a1_reward.shape[0])  
     p = F.sigmoid(result)
     if kwargs.get("reverse", False):
-        print("Attention: reverse the preference score is using")
+        # print("Attention: reverse the preference score is using")
         p = 1 - p
     # return p - 0.5 * torch.ones(len(a_1_iuput)).to(device)
     return p
@@ -430,7 +430,7 @@ class BTRewardNetwork(nn.Module):
     def forward(self, input_ids, attention_mask):
         with torch.no_grad():
             outputs = self.rm(input_ids=input_ids, attention_mask=attention_mask)
-            scores = outputs.logits.squeeze(0)
+            scores = outputs.logits.squeeze()
             if scores.ndim == 0:
                 scores = scores.unsqueeze(0)
             return scores

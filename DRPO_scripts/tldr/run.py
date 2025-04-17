@@ -35,7 +35,7 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from trl.trainer.drpo_utils import GPMPipeline, BTPipeline, estDPOStylePipeline, BTwithRewardPipeline
+from trl.trainer.drpo_utils import GPMPipeline, estDPOStylePipeline, BTRewardNetwork
 from trl.trainer import DRPOConfig, DRPOTrainer
 
 def main(script_args, training_args, model_args):
@@ -84,7 +84,7 @@ def main(script_args, training_args, model_args):
         if isinstance(training_args.preference_model_id, dict):
             preference_pipeline = estDPOStylePipeline(training_args.preference_model_id)
         else: 
-            preference_pipeline = BTwithRewardPipeline(training_args.preference_model_id)
+            preference_pipeline = BTRewardNetwork(training_args.preference_model_id, pad_token_id=tokenizer.pad_token_id)
     else:
         preference_pipeline = GPMPipeline(training_args.preference_model_id)
 
@@ -163,7 +163,7 @@ model_args = ModelConfig(
         model_name_or_path = model_id,
 )
 
-with open("./DRPO_scripts/tldr/train_configs/config11.yaml", "r") as f:
+with open("./DRPO_scripts/tldr/train_configs/config0.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(
