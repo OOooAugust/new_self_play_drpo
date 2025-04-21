@@ -650,8 +650,9 @@ class DRPOTrainer(Trainer):
     
     def training_step(self, model:nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int]=None) -> torch.Tensor:
         model.train()
+        args = self.args
 
-        if self.args.model_and_preference_share_basemodel:
+        if args.model_and_preference_share_basemodel:
             batch_size = inputs["prompt_ids"].size(0)
             prompt_ids = inputs["prompt_ids"]
             prompt_attention_mask = inputs["prompt_attention_mask"]
@@ -668,25 +669,20 @@ class DRPOTrainer(Trainer):
             per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
 
             with torch.no_grad():
-                per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
+                if not args.loss2_only:
+                    per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
                 per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
 
                 # Compute preference score g(y*, y', x) and g(y, y', x)
             with torch.inference_mode():
-                prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
-                prompt_astar_attention_mask = torch.cat((prompt_attention_mask_repeated, astar_attention_mask), dim=1)
                 prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
                 prompt_a2_attention_mask = torch.cat((prompt_attention_mask, a2_attention_mask), dim=1)
-                prompt_a2_repeated_ids = prompt_a2_ids.repeat(self.args.num_astar, 1)
-                prompt_a2_repeated_attention_mask = prompt_a2_attention_mask.repeat(self.args.num_astar, 1)
-                prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
-                prompt_a1_attention_mask = torch.cat((prompt_attention_mask, a1_attention_mask), dim=1)
-
-                # print("prompt_astar_ids: ", prompt_astar_ids)
-                # print("prompt_astar_attention_mask: ", prompt_astar_attention_mask)
-                # print("prompt_a2_repeated_ids: ", prompt_a2_repeated_ids)
-                # print("prompt_a2_repeated_attention_mask: ", prompt_a2_repeated_attention_mask)
-                preference_score_star = get_preference_score_without_decoding(
+                if not args.loss1_only:
+                    prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
+                    prompt_astar_attention_mask = torch.cat((prompt_attention_mask_repeated, astar_attention_mask), dim=1)
+                    prompt_a2_repeated_ids = prompt_a2_ids.repeat(self.args.num_astar, 1)
+                    prompt_a2_repeated_attention_mask = prompt_a2_attention_mask.repeat(self.args.num_astar, 1)
+                    preference_score_star = get_preference_score_without_decoding(
                     self.preference_model, 
                     prompt_astar_ids,
                     prompt_astar_attention_mask, 
@@ -695,45 +691,48 @@ class DRPOTrainer(Trainer):
                     is_bt_model = self.args.is_bt_model,
                     kwargs=self.args.preference_model_kwargs or {}
                 )
+                    if self.args.missing_eos_penalty is not None:
+                        preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
 
-                if self.args.missing_eos_penalty is not None:
-                    preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
-                
-                # print("prompt_a1_ids: ", prompt_a1_ids)
-                # print("prompt_a1_attention_mask: ", prompt_a1_attention_mask)
-                # print("prompt_a2_ids: ", prompt_a2_ids)
-                # print("prompt_a2_attention_mask: ", prompt_a2_attention_mask)
-                preference_score = get_preference_score_without_decoding(
-                    self.preference_model, 
-                    prompt_a1_ids,
-                    prompt_a1_attention_mask,
-                    prompt_a2_ids,
-                    prompt_a2_attention_mask,
-                    is_bt_model = self.args.is_bt_model,
-                    kwargs=self.args.preference_model_kwargs or {}
-                )
+                    del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
+                if not loss2_only:
+                    prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
+                    prompt_a1_attention_mask = torch.cat((prompt_attention_mask, a1_attention_mask), dim=1)
 
-                # print("preference_score_star: ", preference_score_star.shape, preference_score_star)
-                # print("preference_score: ", preference_score.shape, preference_score)
+                    preference_score = get_preference_score_without_decoding(
+                        self.preference_model, 
+                        prompt_a1_ids,
+                        prompt_a1_attention_mask,
+                        prompt_a2_ids,
+                        prompt_a2_attention_mask,
+                        is_bt_model = self.args.is_bt_model,
+                        kwargs=self.args.preference_model_kwargs or {}
+                    )
+                    del (prompt_a1_ids, prompt_a1_attention_mask)
             
-            del (prompt_astar_ids, prompt_a2_ids, prompt_a1_ids, prompt_ids, a1_ids, 
-                 a2_ids, prompt_ids_repeated, astar_ids, prompt_a2_repeated_ids,
-                 prompt_astar_attention_mask, prompt_a2_attention_mask, prompt_a1_attention_mask)
-
-            logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
-            logps = (per_token_logps * a1_attention_mask).sum(1)
-            ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
-            # print("pi, ref:",logps_sum, ref_logps_sum)
-            loss2 = -(logps_star * preference_score_star.clone().detach()).mean()
-            ratio = torch.exp(logps - ref_logps)
-            clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
-            losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
+            del (prompt_a2_ids, prompt_a2_attention_mask)
 
             # compute kl divergence
             kl_onpolicy_part = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
             mean_kl = kl_onpolicy_part.mean()
+            if not args.loss1_only:
+                logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
+                loss2 = -(logps_star * preference_score_star.clone().detach()).mean()
+                
+            if not args.loss2_only:
+                logps = (per_token_logps * a1_attention_mask).sum(1)
+                ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
 
-            loss = losses1.mean() + loss2 + self.beta * mean_kl
+                ratio = torch.exp(logps - ref_logps)
+                clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
+                losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
+
+            if loss1_only:
+                loss = loss1.mean() + self.beta * mean_kl
+            elif loss2_only:
+                loss = loss2 + self.beta * mean_kl
+            else:
+                loss = losses1.mean() + loss2 + self.beta * mean_kl
 
         else:
             batch_size = inputs["prompt_ids"].size(0)
@@ -791,7 +790,7 @@ class DRPOTrainer(Trainer):
                     kwargs=self.args.preference_model_kwargs or {}
                 )
                 
-                if self.args.missing_eos_penalty is not None:
+                if args.missing_eos_penalty is not None:
                     preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
 
                 
@@ -843,14 +842,14 @@ class DRPOTrainer(Trainer):
             # print("pi, ref:",logps_sum, ref_logps_sum)
             
             
-            if self.args.ratio_processing == "clip":
+            if args.ratio_processing == "clip":
                 ratio = torch.exp(logps - ref_logps)
                 # print("ratio",ratio)
                 clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
                 losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
                 # print("loss1", losses1.mean())
             
-            elif self.args.ratio_processing == "self_normalize":
+            elif args.ratio_processing == "self_normalize":
                 # print(torch.exp(logps_sum).mean())
                 # print(torch.exp(ref_logps_sum).mean())
                 ratio_nominator = torch.exp(logps) / torch.exp(logps).mean()
@@ -864,11 +863,11 @@ class DRPOTrainer(Trainer):
                 # losses1 = -ratio * (rank - 0.5 * torch.ones_like(rank) - preference_score.clone()).detach()
                 losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps
             
-            if self.args.loss2_only:
+            if args.loss2_only:
                 loss = loss2 + self.beta * mean_kl
                 # print(losses2.mean(), mean_kl)
                 # print(loss)
-            elif self.args.loss1_only:
+            elif args.loss1_only:
                 losses1 = -clipped_ratio.detach() * rank.detach() * logps
                 loss = losses1.mean() + self.beta * mean_kl
             else:
