@@ -409,12 +409,16 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
                     
                     # 解析响应内容
                     lines = [line.strip() for line in response.split('\n')]
+                    print(lines)
                     comparison = next((line for line in lines if line.lower().startswith("comparison:")), None)
-                    helpful_line = next((line for line in reversed(lines) if line.lower().startswith("more helpful:")), None)
-
+                    print("comparison", comparison)
+                    helpful_line = next((line for line in reversed(lines) if line.lower().startswith("preferred:")), None)
+                    print("helpful_line", helpful_line)
                     # 提取原因和选择
                     reason = comparison.split(":", 1)[1].strip() if comparison else "No comparison provided"
+                    print("reason", reason)
                     choice = helpful_line.split(":")[-1].strip().upper() if helpful_line else None
+                    print("choice", choice)
 
                     # 转换选择为数字
                     if choice == "A":

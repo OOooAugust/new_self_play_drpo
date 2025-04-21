@@ -19,14 +19,29 @@ from huggingface_hub import InferenceClient
 
 
 
-system_prompt = """Which of the following summaries does a better job of summarizing the post? 
-Strictly follow these criteria when selecting the best summary: 
-1. Prioritize the summary which eliminates unnecessary details and keeps only the author’s main concern or question. 
-2. Avoid lengthy sentences, minor details or redundant information, express the key idea in few words. 
-3. Prioritize the shorter summary as long as it remains clear and preserves the main idea.  
-Post: {prompt}. 
-Summary 0: {response0}, Summary 1: {response1}, 
-state only "0" or "1" to indicate your choice."""
+# system_prompt = """Which of the following summaries does a better job of summarizing the post? 
+# Strictly follow these criteria when selecting the best summary: 
+# 1. Prioritize the summary which eliminates unnecessary details and keeps only the author’s main concern or question. 
+# 2. Avoid lengthy sentences, minor details or redundant information, express the key idea in few words. 
+# 3. Prioritize the shorter summary as long as it remains clear and preserves the main idea.  
+# Post: {prompt}. 
+# Summary 0: {response0}, Summary 1: {response1}, 
+# state only "0" or "1" to indicate your choice."""
+
+system_prompt = """Which of the following summaries does a better job of 
+summarizing the most important points in the given forum post, 
+without including unimportant or irrelevant details? 
+A good summary is both precise and concise.
+Post: {user_query}
+Summary A: {response_a}
+Summary B: {response_b}
+FIRST provide a one-sentence comparison of the two summaries, 
+explaining which you prefer and why. 
+SECOND, on a new line, state only "A" or "B" to indicate your choice. 
+Your response should use the format:
+Comparison: <one-sentence comparison and explanation>
+Preferred: <"A" or "B">"""
+
 
 judge = OpenAIPairwiseJudge(model = "gpt-4o-mini", system_prompt=system_prompt)
 def evaluate_and_save(data, method_name, temp):
@@ -52,7 +67,7 @@ def evaluate_and_save(data, method_name, temp):
 
 data = load_dataset("Eehan/eval-tldr-dpo-drpo-0.75tmp-sft-ppo-1000")
 temperatures = [0, 0.25, 0.5, 0.75, 1.0]
-all_indices = list(range(1000))
+all_indices = list(range(3000))
 random.shuffle(all_indices)  
 num_samples_per_temp = len(all_indices) // len(data.keys())
 print(num_samples_per_temp)
