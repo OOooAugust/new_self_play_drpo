@@ -340,7 +340,6 @@ class HfPairwiseJudge(BasePairwiseJudge):
         # Return the ranks
         return ranks
 
-
 class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
     Judge based on the OpenAI API.
@@ -360,7 +359,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
 
     def __init__(
-        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 10000
+        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 100000000
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
@@ -370,7 +369,86 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
         self.max_requests = max_requests
         self.num_requests = 0
         self._warned = False
+    def judge_with_reason(self, prompts: list[str], completions: list[list[str]], shuffle_order: bool = True) -> list[int]:
+        # 检查请求限制
+        if self.max_requests is not None and self.num_requests >= self.max_requests:
+            if not self._warned:
+                logging.warning(
+                    f"Reached the maximum number of requests ({self.max_requests}). Returning -1."
+                    " Set `max_requests` to None for no limit."
+                )
+                self._warned = True
+            return [-1] * len(prompts)
 
+        # 初始化存储原因的变量
+        last_reasons = []
+        flip_mask = None
+
+        # 打乱响应顺序避免位置偏差
+        if shuffle_order:
+            flip_mask = np.random.choice([True, False], size=len(prompts))
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+
+        def get_rank_with_reason(prompt, candidates):
+            """返回元组 (rank, reason)"""
+            content = self.system_prompt.format(
+                user_query=prompt,
+                response_a=candidates[0],
+                response_b=candidates[1]
+            )
+            messages = [{"role": "user", "content": content}]
+            
+            for retry in range(6):
+                try:
+                    completion = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        max_tokens=200
+                    )
+                    response = completion.choices[0].message.content.strip()
+                    
+                    # 解析响应内容
+                    lines = [line.strip() for line in response.split('\n')]
+                    comparison = next((line for line in lines if line.lower().startswith("comparison:")), None)
+                    helpful_line = next((line for line in reversed(lines) if line.lower().startswith("more helpful:")), None)
+
+                    # 提取原因和选择
+                    reason = comparison.split(":", 1)[1].strip() if comparison else "No comparison provided"
+                    choice = helpful_line.split(":")[-1].strip().upper() if helpful_line else None
+
+                    # 转换选择为数字
+                    if choice == "A":
+                        return 0, reason
+                    elif choice == "B":
+                        return 1, reason
+                    else:
+                        return -1, f"Invalid choice: {choice}"
+
+                except openai.RateLimitError:
+                    wait = 0.5 * (2 ** retry)
+                    logging.warning(f"Rate limit exceeded. Retry {retry+1}/6 in {wait}s...")
+                    time.sleep(wait)
+                except Exception as e:
+                    logging.warning(f"Error: {str(e)}")
+                    return -1, f"API Error: {str(e)}"
+
+            return -1, "Max retries exceeded"
+
+        # 并发执行请求
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(get_rank_with_reason, prompts, completions))
+
+        # 分离结果和原因
+        ranks = [r[0] for r in results]
+        last_reasons = [r[1] for r in results]
+
+        # 恢复原始顺序
+        if shuffle_order and flip_mask is not None:
+            ranks = [rank if not flip else 1 - rank for rank, flip in zip(ranks, flip_mask)]
+
+        self.num_requests += len(prompts)
+        return ranks, last_reasons
+    
     def judge(self, prompts: list[str], completions: list[list[str]], shuffle_order: bool = True) -> list[int]:
         # Check if the limit of requests is reached, if so, use random choice instead
         if self.max_requests is not None and self.num_requests >= self.max_requests:
@@ -405,7 +483,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
                         logging.debug(f"Invalid response: '{response}'. Returning -1.")
                         return -1
                 except openai.RateLimitError as err:
-                    wait_time = 0.2 * (2 ** retries)  
+                    wait_time = 0.5 * (2 ** retries)  
                     logging.warning(f"Rate limit hit. Retrying in {wait_time:.2f} seconds...")
                     time.sleep(wait_time)
                     retries += 1
@@ -426,6 +504,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Return the ranks
         return ranks
+
 
 
 class AllTrueJudge(BaseBinaryJudge):
