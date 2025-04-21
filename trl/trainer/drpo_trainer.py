@@ -239,7 +239,7 @@ def apply_chat_template(
                 example["prompt"] + example["a2"], tools=tools, tokenize=False
             )
         a2 = prompt_a2[len(prompt) :]
-       
+
     # Ensure that the prompt is the initial part of the prompt-completion string
     if "prompt" in example:
         error_message = (
@@ -399,26 +399,27 @@ class DRPOTrainer(Trainer):
                 self.preference_model = self.preference_model.to(self.accelerator.device)
 
         self.stats = {
-            "logps/a1": [],
-            "logps/a1_ref": [],
-            "logps/a*": [],
-            "logps/a*_ref": [],
-            "ps/a1": [],
-            "ps/a*": [],
             "beta": [],
             "objective/kl": [],
             "objective/loss": [],
-            "is_ratio": [],
-            "ps/rank": [],
+            "rank": [],
         }
         
-        if args.ratio_processing == "clip":
-            # self.stats["objective/loss1_clipped"] = []
-            self.stats["clipped_ratio"] = []
+
         
         if not args.loss2_only:
             self.stats["objective/loss1"] = []
+            self.stats["logps/a1"] = []
+            self.stats["logps/a1_ref"] = []
+            self.stats["ps/a1"] = []
+            self.stats["is_ratio"] = []
+            if args.ratio_processing == "clip":
+            # self.stats["objective/loss1_clipped"] = []
+                self.stats["clipped_ratio"] = []
         if not args.loss1_only:
+            self.stats["logps/a*"] = []
+            self.stats["logps/a*_ref"] = []
+            self.stats["ps/a*"] = []
             self.stats["objective/loss2"] = []
 
 
@@ -695,7 +696,7 @@ class DRPOTrainer(Trainer):
                         preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
 
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
-                if not loss2_only:
+                if not args.loss2_only:
                     prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
                     prompt_a1_attention_mask = torch.cat((prompt_attention_mask, a1_attention_mask), dim=1)
 
@@ -727,9 +728,9 @@ class DRPOTrainer(Trainer):
                 clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
                 losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
 
-            if loss1_only:
+            if args.loss1_only:
                 loss = loss1.mean() + self.beta * mean_kl
-            elif loss2_only:
+            elif args.loss2_only:
                 loss = loss2 + self.beta * mean_kl
             else:
                 loss = losses1.mean() + loss2 + self.beta * mean_kl
@@ -875,25 +876,25 @@ class DRPOTrainer(Trainer):
             
 
         # log everything
-        self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps).mean().item())
-        self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star).mean().item())
-        self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logps).mean().item())
-        self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star*astar_attention_mask).sum(-1).mean().item())
-        self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
-        self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['beta'].append(self.beta)
         self.stats['objective/kl'].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         if not self.args.loss2_only:
             self.stats['objective/loss1'].append(self.accelerator.gather_for_metrics(losses1).mean().item())
+            self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps).mean().item())
+            self.stats['logps/a1_ref'].append(self.accelerator.gather_for_metrics(ref_logps).mean().item())
+            self.stats['ps/a1'].append(self.accelerator.gather_for_metrics(preference_score).mean().item()) # preference score
+            self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean()).mean().item())
+            if self.args.ratio_processing == "clip":
+                # self.stats['objective/loss1_clipped'].append(self.accelerator.gather_for_metrics(losses1_max.mean()).mean().item())
+                self.stats['clipped_ratio'].append(self.accelerator.gather_for_metrics(clipped_ratio).mean().item())
         if not self.args.loss1_only:
             self.stats['objective/loss2'].append(self.accelerator.gather_for_metrics(loss2).item())
+            self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star).mean().item())
+            self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(per_token_ref_logps_star*astar_attention_mask).sum(-1).mean().item())
+            self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_star).mean().item()) # preference score
         self.stats['objective/loss'].append(self.accelerator.gather_for_metrics(loss).mean().item())
-        self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean()).mean().item())
-        self.stats['ps/rank'].append(self.accelerator.gather_for_metrics(rank).mean().item())
+        self.stats['rank'].append(self.accelerator.gather_for_metrics(rank).mean().item())
 
-        if self.args.ratio_processing == "clip":
-            # self.stats['objective/loss1_clipped'].append(self.accelerator.gather_for_metrics(losses1_max.mean()).mean().item())
-            self.stats['clipped_ratio'].append(self.accelerator.gather_for_metrics(clipped_ratio).mean().item())
 
         
 
