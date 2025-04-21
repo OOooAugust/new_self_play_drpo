@@ -6,3 +6,5 @@ torch
 parameterized
 huggingface_hub
 wandb
+openai
+flash_attn

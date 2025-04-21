@@ -667,12 +667,12 @@ class DRPOTrainer(Trainer):
             prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(model, prompt_ids, prompt_attention_mask, self.args.num_astar)
             contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
 
-            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
+            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.generate_temperature)
 
             with torch.no_grad():
                 if not args.loss2_only:
                     per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
-                per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
+                per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.generate_temperature)
 
                 # Compute preference score g(y*, y', x) and g(y, y', x)
             with torch.inference_mode():
@@ -757,14 +757,14 @@ class DRPOTrainer(Trainer):
             contain_eos_token = torch.any(astar_ids == self.processing_class.eos_token_id, dim=-1)
 
             # log pi(y*|x) shape(num_astar*batch_size, 1)
-            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.forward_temperature)
+            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.generate_temperature)
 
 
             with torch.no_grad():
                 if self.ref_model is not None:
                     # log pi_ref(y|x)
                     per_token_ref_logps = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask, temperature=self.args.forward_temperature)
-                    per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+                    per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask, temperature=self.args.generate_temperature)
                 else:
                     raise NotImplementedError("Peft is not implemented yet and ref model should be specified.")
 
