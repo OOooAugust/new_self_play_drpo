@@ -19,29 +19,14 @@ from huggingface_hub import InferenceClient
 
 
 
-# system_prompt = """Which of the following summaries does a better job of summarizing the post? 
-# Strictly follow these criteria when selecting the best summary: 
-# 1. Prioritize the summary which eliminates unnecessary details and keeps only the author’s main concern or question. 
-# 2. Avoid lengthy sentences, minor details or redundant information, express the key idea in few words. 
-# 3. Prioritize the shorter summary as long as it remains clear and preserves the main idea.  
-# Post: {prompt}. 
-# Summary 0: {response0}, Summary 1: {response1}, 
-# state only "0" or "1" to indicate your choice."""
-
-system_prompt = """Which of the following summaries does a better job of 
-summarizing the most important points in the given forum post, 
-without including unimportant or irrelevant details? 
-A good summary is both precise and concise.
-Post: {user_query}
-Summary A: {response_a}
-Summary B: {response_b}
-FIRST provide a one-sentence comparison of the two summaries, 
-explaining which you prefer and why. 
-SECOND, on a new line, state only "A" or "B" to indicate your choice. 
-Your response should use the format:
-Comparison: <one-sentence comparison and explanation>
-Preferred: <"A" or "B">"""
-
+system_prompt = """Which of the following summaries does a better job of summarizing the post? 
+Strictly follow these criteria when selecting the best summary: 
+1. Prioritize the summary which eliminates unnecessary details and keeps only the author’s main concern or question. 
+2. Avoid lengthy sentences, minor details or redundant information, express the key idea in few words. 
+3. Prioritize the shorter summary as long as it remains clear and preserves the main idea.  
+Post: {prompt}. 
+Summary 0: {response0}, Summary 1: {response1}, 
+state only "0" or "1" to indicate your choice."""
 
 judge = OpenAIPairwiseJudge(model = "gpt-4o-mini", system_prompt=system_prompt)
 def evaluate_and_save(data, method_name, temp):
@@ -84,8 +69,10 @@ for temp in temperatures:
     temp_data = temperature_data[temp]
     
     data_sft_dpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["dpo"]] for x in temp_data]}
-    data_dpo_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["dpo"], x["drpo-0.9tmp"]] for x in temp_data]}
-    data_sft_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["drpo-0.9tmp"]] for x in temp_data]}
+    data_dpo_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["dpo"], x["drpo-0.75temp"]] for x in temp_data]}
+    data_sft_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["drpo-0.75temp"]] for x in temp_data]}
+    data_sft_ppo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["sft"], x["ppo"]] for x in temp_data]}
+    data_ppo_drpo = {"prompt": [x["prompt"] for x in temp_data], "completions": [[x["ppo"], x["drpo-0.75temp"]] for x in temp_data]}
     
 
     sft_dpo_win_rate = evaluate_and_save(data_sft_dpo, "sft_dpo", temp)
@@ -94,15 +81,22 @@ for temp in temperatures:
     print(f"dpo_drpo_finish temp {temp}")
     sft_drpo_win_rate = evaluate_and_save(data_sft_drpo, "sft_drpo", temp)
     print(f"sft_drpo_finish temp {temp}")
+    sft_ppo_win_rate = evaluate_and_save(data_sft_ppo, "sft_ppo", temp)
+    print(f"sft_ppo_finish temp {temp}")
+    ppo_drpo_win_rate = evaluate_and_save(data_ppo_drpo, "ppo_drpo", temp)
+    print(f"ppo_drpo_finish temp {temp}")
+>>>>>>> b4ba4f5 (hh_train_scripts)
 
 
     temp_results = [
         {"Temperature": temp, "Model": "SFT_DPO", "Win Rate": sft_dpo_win_rate},
-        {"Temperature": temp, "Model": "DPO_DR-DPO", "Win Rate": dpo_drpo_win_rate},
-        {"Temperature": temp, "Model": "SFT_DR-DPO", "Win Rate": sft_drpo_win_rate}
+        {"Temperature": temp, "Model": "DPO_DRPO", "Win Rate": dpo_drpo_win_rate},
+        {"Temperature": temp, "Model": "SFT_DRPO", "Win Rate": sft_drpo_win_rate},
+        {"Temperature": temp, "Model": "SFT_PPO", "Win Rate": sft_ppo_win_rate},
+        {"Temperature": temp, "Model": "PPO_DRPO", "Win Rate": ppo_drpo_win_rate},
     ]
     
     results_df = pd.concat([results_df, pd.DataFrame(temp_results)], ignore_index=True)
 
-results_df.to_csv("head_to_head_summary_results_1.csv", index=False)
+results_df.to_csv("head_to_head_summary_results_2.csv", index=False)
 print("Clear by Spring")
