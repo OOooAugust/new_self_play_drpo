@@ -207,6 +207,7 @@ class RewardTrainer(Trainer):
             with PartialState().local_main_process_first():
                 fn_kwargs = {"tokenizer": processing_class}
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class})
+                print("AFTER APPLYING CHAT TEMPLATE", train_dataset[0])
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,

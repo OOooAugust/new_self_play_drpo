@@ -61,32 +61,36 @@ if __name__ == "__main__":
 
     dataset = dataset.remove_columns(["rank", "a1", "a2"])
     dataset = deduplicate_consecutive_dataset(dataset)
-    dataset = dataset.select(range(1000))
+    dataset = dataset.shuffle(seed=36).select(range(3000))
 
-    temperatures = [0, 0.3, 0.7]
+    temperatures = [0, 0.25, 0.5, 0.75, 1.0]
 
     # Initialize models and tokenizers
     dpo_pipe, dpo_tokenizer = pipe("Kyleyee/pythia-1b-deduped-tldr-dpo")
     drpo_pipe, drpo_tokenizer = pipe("Eehan/pythia-1b-deduped-tldr-ppo-0.9tmp")
     sft_pipe, sft_tokenizer = pipe("trl-lib/pythia-1b-deduped-tldr-sft")
+    ppo_pipe, ppo_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__ppo__tldr")
 
     model_names = [
         "dpo",
-        "drpo-0.9tmp",
+        "drpo-0.75temp",
         "sft",
+        "ppo"
     ]
 
     # Create dictionaries for pipes and tokenizers
     pipes = {
         "dpo": dpo_pipe,
-        "drpo-0.9tmp": drpo_pipe,
+        "drpo-0.75temp": drpo_pipe,
         "sft": sft_pipe,
+        "ppo": ppo_pipe
     }
 
     tokenizers = {
         "dpo": dpo_tokenizer,
-        "drpo-0.9tmp": drpo_tokenizer,
+        "drpo-0.75temp": drpo_tokenizer,
         "sft": sft_tokenizer,
+        "ppo": ppo_tokenizer
     }
     
     # Create kwargs dictionary
@@ -109,4 +113,4 @@ if __name__ == "__main__":
         )
         processed[f"temperature_{temp}"] = processed_shard
 
-    processed.push_to_hub("Eehan/eval-tldr-dpo-drpo-0.9tmp-sft-1000")
+    processed.push_to_hub("Eehan/eval-tldr-dpo-drpo-0.75tmp-sft-ppo-1000")
