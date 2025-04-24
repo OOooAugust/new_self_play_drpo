@@ -63,29 +63,42 @@ if __name__ == "__main__":
     dataset = deduplicate_consecutive_dataset(dataset)
     dataset = dataset.select(range(1000))
 
-    temperatures = [0, 0.3, 0.7]
+    temperatures = [0, 0.25, 0.5,0.75,1.0]
 
     # Initialize models and tokenizers
     dpo_pipe, dpo_tokenizer = pipe("Kyleyee/pythia-1b-deduped-tldr-dpo")
-    drpo_pipe, drpo_tokenizer = pipe("Eehan/pythia-1b-deduped-tldr-ppo-0.9tmp")
-    sft_pipe, sft_tokenizer = pipe("trl-lib/pythia-1b-deduped-tldr-sft")
+    ppo_pipe, ppo_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__ppo__tldr")
+    # drpo_lowbeta_pipe, drpo_lowbeta_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp0.75")
+    drpo_lowtemp_pipe, drpo_lowtemp_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp-0.25-beta-0.05")
+    drpo_hightemp_pipe, drpo_hightemp_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp-0.75-beta-0.05")
+    dm_pipe, dm_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-dm-temp-0.75-beta-0.05")
+    sft_pipe, sft_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr")
 
     model_names = [
         "dpo",
-        "drpo-0.9tmp",
+        "ppo",
+        "drpo_lowtemp",
+        "drpo_hightemp",
+        "dm",
         "sft",
     ]
 
     # Create dictionaries for pipes and tokenizers
     pipes = {
         "dpo": dpo_pipe,
-        "drpo-0.9tmp": drpo_pipe,
+        "ppo": ppo_pipe,
+        "drpo_lowtemp": drpo_lowtemp_pipe,
+        "drpo_hightemp": drpo_hightemp_pipe,
+        "dm": dm_pipe,
         "sft": sft_pipe,
     }
 
     tokenizers = {
         "dpo": dpo_tokenizer,
-        "drpo-0.9tmp": drpo_tokenizer,
+        "ppo": ppo_tokenizer,
+        "drpo_lowtemp": drpo_lowtemp_tokenizer,
+        "drpo_hightemp": drpo_hightemp_tokenizer,
+        "dm": dm_tokenizer,
         "sft": sft_tokenizer,
     }
     
@@ -109,4 +122,4 @@ if __name__ == "__main__":
         )
         processed[f"temperature_{temp}"] = processed_shard
 
-    processed.push_to_hub("Eehan/eval-tldr-dpo-drpo-0.9tmp-sft-1000")
+    processed.push_to_hub("Eehan/eval-tldr-dpo-ppo-drpo-dm-sft-3000")

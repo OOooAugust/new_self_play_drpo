@@ -9,6 +9,9 @@
 _tmp*
 tmp*
 tags
+*.csv
+*.tsv
+*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -143,3 +146,5 @@ checklink/cookies.txt
 nbs/wandb/
 examples/notebooks/wandb/
 wandb/
+
+output/
