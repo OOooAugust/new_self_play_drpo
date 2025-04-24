@@ -52,7 +52,7 @@ def evaluate_and_save(data, method_name, temp):
 
 data = load_dataset("Eehan/eval-tldr-dpo-drpo-0.75tmp-sft-ppo-1000")
 temperatures = [0, 0.25, 0.5, 0.75, 1.0]
-all_indices = list(range(1000))
+all_indices = list(range(3000))
 random.shuffle(all_indices)  
 num_samples_per_temp = len(all_indices) // len(data.keys())
 print(num_samples_per_temp)
@@ -81,8 +81,8 @@ for temp in temperatures:
     print(f"dpo_drpo_finish temp {temp}")
     sft_drpo_win_rate = evaluate_and_save(data_sft_drpo, "sft_drpo", temp)
     print(f"sft_drpo_finish temp {temp}")
-    sft_ppo_win_rate = evaluate_and_save(data_sft_ppo, "sft_ppo", temp)
-    print(f"sft_ppo_finish temp {temp}")
+    dpo_drpo_win_rate = evaluate_and_save(data_dpo_drpo, "dpo_drpo", temp)
+    print(f"dpo_drpo_finish temp {temp}")
     ppo_drpo_win_rate = evaluate_and_save(data_ppo_drpo, "ppo_drpo", temp)
     print(f"ppo_drpo_finish temp {temp}")
 >>>>>>> b4ba4f5 (hh_train_scripts)
@@ -90,13 +90,13 @@ for temp in temperatures:
 
     temp_results = [
         {"Temperature": temp, "Model": "SFT_DPO", "Win Rate": sft_dpo_win_rate},
-        {"Temperature": temp, "Model": "DPO_DRPO", "Win Rate": dpo_drpo_win_rate},
-        {"Temperature": temp, "Model": "SFT_DRPO", "Win Rate": sft_drpo_win_rate},
         {"Temperature": temp, "Model": "SFT_PPO", "Win Rate": sft_ppo_win_rate},
-        {"Temperature": temp, "Model": "PPO_DRPO", "Win Rate": ppo_drpo_win_rate},
+        {"Temperature": temp, "Model": "SFT_DRPO", "Win Rate": sft_drpo_win_rate},
+        {"Temperature": temp, "Model": "DPO_DRPO", "Win Rate": dpo_drpo_win_rate},
+        {"Temperature": temp, "Model": "PPO_DRPO", "Win Rate": ppo_drpo_win_rate}
     ]
     
     results_df = pd.concat([results_df, pd.DataFrame(temp_results)], ignore_index=True)
 
-results_df.to_csv("head_to_head_summary_results_2.csv", index=False)
+results_df.to_csv("head_to_head_summary_results_0.75temp.csv", index=False)
 print("Clear by Spring")

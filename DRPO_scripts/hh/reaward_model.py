@@ -44,8 +44,8 @@ if __name__ == "__main__":
         eval_strategy="epoch",
         max_length=1024,
         push_to_hub=True,  
-        output_dir = "./selfmodel/output/Qwen2.5-1.5B-reward-hh-witheos",
-        hub_model_id="Kyleyee/Qwen2.5-1.5B-reward_hh-witheos",        
+        output_dir = "./selfmodel/output/Qwen2.5-1.5B-reward-hh-retrain",
+        hub_model_id="Kyleyee/Qwen2.5-1.5B-reward-hh-retrain",        
     )
 
     model_args = ModelConfig(
