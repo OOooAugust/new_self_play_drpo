@@ -732,7 +732,7 @@ class DRPOTrainer(Trainer):
                 losses1 = - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
 
             if args.loss1_only:
-                loss = loss1.mean() + self.beta * mean_kl
+                loss = losses1.mean() + self.beta * mean_kl
             elif args.loss2_only:
                 loss = loss2 + self.beta * mean_kl
             else:
