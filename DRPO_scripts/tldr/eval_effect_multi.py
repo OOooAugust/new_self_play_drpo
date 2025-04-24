@@ -9,18 +9,21 @@ from transformers import HfArgumentParser, AutoTokenizer, AutoModelForCausalLM, 
 
 def pipe(model_id):
     processing_class = AutoTokenizer.from_pretrained(model_id)
+    print(model_id, processing_class.eos_token)
     processing_class.padding_side = "left"
     processing_class.add_special_tokens({"pad_token": "[PAD]"})
     pipe = pipeline(
         "text-generation",
         model=model_id,
         tokenizer=processing_class,
-        batch_size=64,
+        batch_size=128,
         eos_token_id=processing_class.eos_token_id,
     )
     return pipe, processing_class
 
 def extract_dialogue(examples: dict, temperature: float, pipes: dict, kwargs:dict) -> dict:
+    def extract_first_paragraph(text):
+        return text.split('\n\n')[0]
     prompts = examples["prompt"]
     prompt_list = []
     for text in prompts:
@@ -33,7 +36,8 @@ def extract_dialogue(examples: dict, temperature: float, pipes: dict, kwargs:dic
         if temperature > 0:
             model_kwargs["temperature"] = temperature
         generated = pipes[model_name](prompts, **model_kwargs)
-        examples[model_name] = [batch[0]["generated_text"] for batch in generated]
+        examples[model_name] = [extract_first_paragraph(batch[0]["generated_text"]) for batch in generated]
+        # print(examples)
 
     return examples
 
@@ -105,7 +109,7 @@ if __name__ == "__main__":
     # Create kwargs dictionary
     kwargs = {
         model_name: {
-            "max_new_tokens": 64,
+            "max_new_tokens": 128,
             "eos_token_id": tokenizers[model_name].eos_token_id,
             "return_full_text": False
         } for model_name in model_names
@@ -122,4 +126,4 @@ if __name__ == "__main__":
         )
         processed[f"temperature_{temp}"] = processed_shard
 
-    processed.push_to_hub("Eehan/eval-tldr-dpo-ppo-drpo-dm-sft-3000")
+    processed.push_to_hub("Eehan/eval-tldr-dpo-ppo-drpo-dm-sft-1000-cut")
