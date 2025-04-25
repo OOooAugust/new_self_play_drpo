@@ -701,8 +701,8 @@ class DRPOTrainer(Trainer):
                     if self.args.missing_eos_penalty is not None:
                         preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
                     
-                    generated_examples = self.processing_class.batch_decode(prompt_astar_ids[0,:], skip_special_tokens=True)
-                    print("generated_examples: ", generated_examples)
+                    generated_examples = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+                    print("generated_examples: ", generated_examples[0:5])
 
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
                 if not args.loss2_only:
