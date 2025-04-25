@@ -616,7 +616,6 @@ class DRPOTrainer(Trainer):
                 generation_config = self.generation_config,
                 pad_token_id=pad_token_id,
                 eos_token_id=eos_token_id,
-                padding_side="left",
             )
 
         completion_ids = output[:, prompt_ids.shape[1]:]

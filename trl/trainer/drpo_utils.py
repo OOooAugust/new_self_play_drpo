@@ -412,7 +412,13 @@ def get_preference_score_without_decoding(preference_model, a1_iuput, a1_attenti
 
 
 class BTRewardNetwork(nn.Module):
-    def __init__(self, model_name_or_path: str, revision: str = "main", device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), pad_token_id: Optional[int]=None):
+    def __init__(self, 
+    model_name_or_path: str, 
+    revision: str = "main", 
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), 
+    pad_token_id: Optional[int]=None, 
+    eos_token_id: Optional[int]=151645,
+    ):
         super().__init__()
         self.rm = AutoModelForSequenceClassification.from_pretrained(
             model_name_or_path,
@@ -426,6 +432,8 @@ class BTRewardNetwork(nn.Module):
         print(self.rm.config)
         if pad_token_id is not None:
             self.rm.config.pad_token_id = pad_token_id
+            if self.rm.config.pad_token_id == self.rm.config.eos_token_id:
+                self.rm.config.eos_token_id = eos_token_id
         
         # print(self.rm.config)
         self.to(device)
