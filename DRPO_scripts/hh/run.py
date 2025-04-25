@@ -1,4 +1,9 @@
-import shutil
+import sys
+import os
+
+# Add the parent directory to Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 import yaml
 import torch
 from datasets import load_dataset, concatenate_datasets, DatasetDict
