@@ -425,15 +425,15 @@ class BTRewardNetwork(nn.Module):
             revision=revision,
             torch_dtype=torch.bfloat16,
             device_map=device,
-            attn_implementation="flash_attention_2",
+            # attn_implementation="flash_attention_2",
             num_labels=1,
         )
         print("======================\n preference model config\n==============")
         print(self.rm.config)
         if pad_token_id is not None:
             self.rm.config.pad_token_id = pad_token_id
-            if self.rm.config.pad_token_id == self.rm.config.eos_token_id:
-                self.rm.config.eos_token_id = eos_token_id
+            # if self.rm.config.pad_token_id == self.rm.config.eos_token_id:
+            #     self.rm.config.eos_token_id = eos_token_id
         
         # print(self.rm.config)
         self.to(device)

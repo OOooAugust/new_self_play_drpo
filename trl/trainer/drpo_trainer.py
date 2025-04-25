@@ -84,14 +84,14 @@ class DataCollatorDRPO(DataCollatorMixin):
         output = {}
         output["prompt_ids"] = pad(prompt_ids, padding_value = self.pad_token_id, padding_side = "left")
         output["prompt_attention_mask"] = pad(prompt_attention_mask, padding_value = 0, padding_side = "left")
-        # output["a1_ids"] = pad(a1_ids, padding_value = self.pad_token_id, padding_side = "right")
-        # output["a1_attention_mask"] = pad(a1_attention_mask, padding_value = 0, padding_side = "right")
-        # output["a2_ids"] = pad(a2_ids, padding_value = self.pad_token_id, padding_side = "right")
-        # output["a2_attention_mask"] = pad(a2_attention_mask, padding_value = 0, padding_side = "right")
-        output["a1_ids"] = pad(a1_ids, padding_value = self.pad_token_id, padding_side = "left")
-        output["a1_attention_mask"] = pad(a1_attention_mask, padding_value = 0, padding_side = "left")
-        output["a2_ids"] = pad(a2_ids, padding_value = self.pad_token_id, padding_side = "left")
-        output["a2_attention_mask"] = pad(a2_attention_mask, padding_value = 0, padding_side = "left")
+        output["a1_ids"] = pad(a1_ids, padding_value = self.pad_token_id, padding_side = "right")
+        output["a1_attention_mask"] = pad(a1_attention_mask, padding_value = 0, padding_side = "right")
+        output["a2_ids"] = pad(a2_ids, padding_value = self.pad_token_id, padding_side = "right")
+        output["a2_attention_mask"] = pad(a2_attention_mask, padding_value = 0, padding_side = "right")
+        # output["a1_ids"] = pad(a1_ids, padding_value = self.pad_token_id, padding_side = "left")
+        # output["a1_attention_mask"] = pad(a1_attention_mask, padding_value = 0, padding_side = "left")
+        # output["a2_ids"] = pad(a2_ids, padding_value = self.pad_token_id, padding_side = "left")
+        # output["a2_attention_mask"] = pad(a2_attention_mask, padding_value = 0, padding_side = "left")
 
         if "preference_score" in examples[0]:
             output["preference_score"] = torch.tensor([example["preference_score"] for example in examples])
