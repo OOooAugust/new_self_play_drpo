@@ -148,7 +148,7 @@ if __name__ == "__main__":
             model_name_or_path = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e",
     )
 
-    with open("./DRPO_scripts/tldr/train_configs/config0.yaml", "r") as f:
+    with open("./DRPO_scripts/hh/train_configs/config0.yaml", "r") as f:
         training_args_config = yaml.safe_load(f)
 
     training_args = DRPOConfig(
