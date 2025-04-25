@@ -57,7 +57,7 @@ def main(script_args, training_args, model_args):
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
-    ) # FIXME: why do we need padding_side="left"
+    )
 
     tokenizer.eos_token = "<|im_end|>"
     print("special tokens", tokenizer.special_tokens_map)

@@ -422,6 +422,8 @@ class BTRewardNetwork(nn.Module):
             attn_implementation="flash_attention_2",
             num_labels=1,
         )
+        print("======================\n preference model config\n==============")
+        print(self.rm.config.pad_token, self.rm.config.eos_token)
         if pad_token_id is not None:
             self.rm.config.pad_token_id = pad_token_id
         
