@@ -61,6 +61,8 @@ def main(script_args, training_args, model_args):
 
     tokenizer.eos_token = "<|im_end|>"
     print("special tokens", tokenizer.special_tokens_map)
+    print("eos_token_id", tokenizer.eos_token_id)
+    print("pad_token_id", tokenizer.pad_token_id)
 
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
@@ -89,9 +91,6 @@ def main(script_args, training_args, model_args):
         preference_pipeline = GPMPipeline(training_args.preference_model_id)
 
 
-    print("ESO TOKEN",tokenizer.eos_token)
-    print("ESO TOKEN ID",tokenizer.eos_token_id)
-    print(tokenizer.special_tokens_map)
 
     ################
     # Dataset
