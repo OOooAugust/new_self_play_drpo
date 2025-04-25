@@ -261,8 +261,8 @@ def apply_chat_template(
         output["a1"] = a1
     if "a2" in example:
         output["a2"] = a2
-    if "label" in example:
-        output["label"] = example["label"]
+    # if "rank" in example:
+    #     output["rank"] = example["rank"]
 
     return output    
 
@@ -503,7 +503,7 @@ class DRPOTrainer(Trainer):
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens_for_prompt": False,
-                    "eos_after_completion": args.model_and_preference_share_basemodel
+                    "eos_after_completion": args.eos_after_completion,
                 },
                 **map_kwargs,
             )
@@ -696,7 +696,7 @@ class DRPOTrainer(Trainer):
                         preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
                     
                     generated_examples = self.processing_class.batch_decode(prompt_astar_ids[0,:], skip_special_tokens=True)
-                    print("generated_examples: ", generated_examples[0])
+                    print("generated_examples: ", generated_examples)
 
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
                 if not args.loss2_only:

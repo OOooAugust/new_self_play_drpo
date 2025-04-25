@@ -1,8 +1,7 @@
 import shutil
-from trl import apply_chat_template
+import yaml
 import torch
-from accelerate import PartialState
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets, DatasetDict
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -56,6 +55,7 @@ def main(script_args, training_args, model_args):
     ) # FIXME: why do we need padding_side="left"
 
     tokenizer.eos_token = "<|im_end|>"
+    print("special tokens", tokenizer.special_tokens_map)
 
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
@@ -79,7 +79,7 @@ def main(script_args, training_args, model_args):
         if isinstance(training_args.preference_model_id, dict):
             preference_pipeline = estDPOStylePipeline(training_args.preference_model_id)
         else: 
-            preference_pipeline = BTRewardNetwork(training_args.preference_model_id)
+            preference_pipeline = BTRewardNetwork(training_args.preference_model_id, revision=training_args.preference_model_revision)
     else:
         preference_pipeline = GPMPipeline(training_args.preference_model_id)
 
@@ -91,41 +91,26 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-    train_dataset = dataset[script_args.dataset_train_split]
-    eval_dataset = dataset[script_args.dataset_test_split].select(range(500)) if training_args.eval_strategy != "no" else None
+    def transform_dataset(dataset, seed=688):
+    # Process each split individually (train/test)
+        def process_split(split):
+            original = dataset[split]
+            swapped = original.map(lambda x: {
+                'a1': x['a2'],
+                'a2': x['a1'],
+                # 'rank': 1 - int(random.random() < x['chosen_preference']),
+                'rank': 1 - x['rank'],
+            })
 
-    # def prepare_dataset(dataset, tokenizer):
-    #     """pre-tokenize the dataset before training; only collate during training"""
+            return concatenate_datasets([original, swapped])
 
-    #     def tokenize(element):
-    #         input_ids = tokenizer.apply_chat_template(
-    #             element["prompt"],
-    #             padding=False,
-    #             add_generation_prompt=True,
-    #         )
-    #         return {"input_ids": input_ids, "lengths": len(input_ids)}
+    # Apply processing to all splits
+        return DatasetDict({
+            split: process_split(split).shuffle(seed=seed)
+            for split in dataset.keys()  # Handles 'train', 'test', etc.
+        })
+    dataset = load_dataset(script_args.dataset_name, revision=script_args.dataset_config["revision"])
 
-    #     return dataset.map(
-    #         tokenize,
-    #         remove_columns=dataset.column_names,
-    #         num_proc=training_args.dataset_num_proc,
-    #     )
-
-    # # Compute that only on the main process for faster data processing.
-    # # see: https://github.com/huggingface/trl/pull/1255
-    # with PartialState().local_main_process_first():
-    #     train_dataset = prepare_dataset(train_dataset, tokenizer)
-    #     if eval_dataset is not None:
-    #         eval_dataset = prepare_dataset(eval_dataset, tokenizer)
-    #     # filtering
-    #     train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
-    #     if eval_dataset is not None:
-    #         eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
-
-    # assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
-    # print("decode example of train_dataset",tokenizer.decode(train_dataset[0]["input_ids"]))
-    # FIXME: why they are not different
     ################
     # Training
     ################
@@ -145,4 +130,24 @@ def main(script_args, training_args, model_args):
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
-    trainer.generate_completions() # FIXME: why do we need this?
+
+if __name__ == "__main__":
+    script_args = ScriptArguments(
+            dataset_name="Kyleyee/train_data_hh_for_drpo",
+            dataset_config={"revision": "6a4692a29dfb1ec436d80763a7f36c9d1c0f33d9"},
+            dataset_train_split="train",
+            dataset_test_split="validation",
+    )
+
+    model_args = ModelConfig(
+            model_name_or_path = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e",
+    )
+
+    with open("./DRPO_scripts/tldr/train_configs/config0.yaml", "r") as f:
+        training_args_config = yaml.safe_load(f)
+
+    training_args = DRPOConfig(
+        **training_args_config
+    )
+
+    main(script_args, training_args, model_args)
