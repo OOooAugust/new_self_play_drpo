@@ -704,7 +704,7 @@ class DRPOTrainer(Trainer):
                     generated_examples = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
                     # print things in format: if see user/assistant make the output green
 
-                    print("generated_examples: ", generated_examples[0].replace("user", "\032[33muser\032[0m").replace("assistant", "\035[33massistant\035[0m"))
+                    print("generated_examples: ", generated_examples[0].replace("user", "\033[32muser\033[0m").replace("assistant", "\033[35massistant\033[0m"))
 
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
                 if not args.loss2_only:
