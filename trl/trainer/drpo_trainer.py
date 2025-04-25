@@ -702,8 +702,9 @@ class DRPOTrainer(Trainer):
                         preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
                     
                     generated_examples = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
-                    # print things in format: if see user/assistant make the output grenn
-                    print("generated_examples: ", generated_examples[0].replace("user", "033[33muser\033[0m").replace("assistant", "\033[33massistant\033[0m"))
+                    # print things in format: if see user/assistant make the output green
+
+                    print("generated_examples: ", generated_examples[0].replace("user", "\032[33muser\032[0m").replace("assistant", "\035[33massistant\035[0m"))
 
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
                 if not args.loss2_only:
