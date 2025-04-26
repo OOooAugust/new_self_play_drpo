@@ -118,6 +118,57 @@ def get_reward_model(base_causal_model, base_llm_model, value_head_dim: int, add
          
     return CustomRewardModel
 
+class GPMwithRewardNetwork(nn.Module):
+    def __init__(self, 
+                 model_name_or_path: str, 
+                 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), 
+                 pad_token_id: Optional[int]=None,
+                 is_general_preference: bool=True,
+                 bf16: bool=True):
+        super().__init__()
+        self.device = device
+
+        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+        config._attn_implementation = "eager"
+        base_class = AutoModel._model_mapping[type(config)]
+        base_causal_class = AutoModelForCausalLM._model_mapping.get(type(config), None)
+        try:
+            dir_path = snapshot_download(repo_id=model_name_or_path)
+        except Exception as e:
+            dir_path = model_name_or_path
+        combined_weights = {}
+        for filename in os.listdir(dir_path):
+            if filename.endswith(".safetensors"):
+                file_path = os.path.join(dir_path, filename)
+                weights = load_file(file_path)
+                combined_weights.update(weights)
+
+        if "value_head.weight" in combined_weights:
+            self.value_head_dim = combined_weights["value_head.weight"].shape[0]
+        self.add_prompt_head = True if "prompt_head.weight" in combined_weights else False 
+
+        cls_class = get_reward_model(base_causal_class, base_class, add_prompt_head=self.add_prompt_head, value_head_dim=self.value_head_dim, is_general_preference=is_general_preference)
+        self.model = cls_class.from_pretrained(
+            model_name_or_path,
+            config=config,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16 if bf16 else "auto",
+            device_map="auto",
+            attn_implementation="eager"
+        )
+
+        if pad_token_id is not None:
+            self.rm.config.pad_token_id = pad_token_id
+
+        print(self.model.config)
+    
+    def forward(self, input_ids, attention_mask, return_output=False):
+        input_ids[:, -1] = self.model.config.eos_token_id
+        attention_mask[:, -1] = 1
+        with torch.no_grad():
+            rewards, _ = self.model.custom_forward(input_ids, attention_mask, return_output)
+        return rewards
+
 class GPMPipeline:
     def __init__(self, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), is_general_preference: bool=True, bf16: bool=True, truncation: bool=True, max_length: int=4096, padding: bool=True, tau: float=0.1):
         self.device = device

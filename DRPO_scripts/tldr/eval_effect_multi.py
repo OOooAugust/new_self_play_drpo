@@ -70,40 +70,48 @@ if __name__ == "__main__":
     temperatures = [0, 0.25, 0.5,0.75,1.0]
 
     # Initialize models and tokenizers
-    dpo_pipe, dpo_tokenizer = pipe("Kyleyee/pythia-1b-deduped-tldr-dpo")
-    ppo_pipe, ppo_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__ppo__tldr")
-    # drpo_lowbeta_pipe, drpo_lowbeta_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp0.75")
-    drpo_lowtemp_pipe, drpo_lowtemp_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp-0.25-beta-0.05")
-    drpo_hightemp_pipe, drpo_hightemp_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp-0.75-beta-0.05")
-    dm_pipe, dm_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-dm-temp-0.75-beta-0.05")
-    sft_pipe, sft_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr")
+    # dpo_pipe, dpo_tokenizer = pipe("Kyleyee/pythia-1b-deduped-tldr-dpo")
+    # ppo_pipe, ppo_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__ppo__tldr")
+    # # drpo_lowbeta_pipe, drpo_lowbeta_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp0.75")
+    # drpo_lowtemp_pipe, drpo_lowtemp_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp-0.25-beta-0.05")
+    # drpo_hightemp_pipe, drpo_hightemp_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-drpo-temp-0.75-beta-0.05")
+    drpo_medtemp_pipe, drpo_medtemp_tokenizer = pipe("Eehan/pythia-1b-deduped-drpo-tldr-temp-0.5-beta-0.05")
+    drpo_smallbeta_pipe, drpo_smallbeta_tokenizer = pipe("Eehan/pythia-1b-deduped-drpo-tldr-temp-0.3-beta-0.01")
+    # dm_pipe, dm_tokenizer = pipe("Eehan/Pythia-1b-deduped-tldr-dm-temp-0.75-beta-0.05")
+    # sft_pipe, sft_tokenizer = pipe("cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr")
 
     model_names = [
-        "dpo",
-        "ppo",
-        "drpo_lowtemp",
-        "drpo_hightemp",
-        "dm",
-        "sft",
+        # "dpo",
+        # "ppo",
+        # "drpo_lowtemp",
+        # "drpo_hightemp",
+        "drpo_medtemp",
+        "drpo_smallbeta",
+        # "dm",
+        # "sft",
     ]
 
     # Create dictionaries for pipes and tokenizers
     pipes = {
-        "dpo": dpo_pipe,
-        "ppo": ppo_pipe,
-        "drpo_lowtemp": drpo_lowtemp_pipe,
-        "drpo_hightemp": drpo_hightemp_pipe,
-        "dm": dm_pipe,
-        "sft": sft_pipe,
+        # "dpo": dpo_pipe,
+        # "ppo": ppo_pipe,
+        # "drpo_lowtemp": drpo_lowtemp_pipe,
+        # "drpo_hightemp": drpo_hightemp_pipe,
+        "drpo_medtemp": drpo_medtemp_pipe,
+        "drpo_smallbeta": drpo_smallbeta_pipe,
+        # "dm": dm_pipe,
+        # "sft": sft_pipe,
     }
 
     tokenizers = {
-        "dpo": dpo_tokenizer,
-        "ppo": ppo_tokenizer,
-        "drpo_lowtemp": drpo_lowtemp_tokenizer,
-        "drpo_hightemp": drpo_hightemp_tokenizer,
-        "dm": dm_tokenizer,
-        "sft": sft_tokenizer,
+        # "dpo": dpo_tokenizer,
+        # "ppo": ppo_tokenizer,
+        # "drpo_lowtemp": drpo_lowtemp_tokenizer,
+        # "drpo_hightemp": drpo_hightemp_tokenizer,
+        "drpo_medtemp": drpo_medtemp_tokenizer,
+        "drpo_smallbeta": drpo_smallbeta_tokenizer,
+        # "dm": dm_tokenizer,
+        # "sft": sft_tokenizer,
     }
     
     # Create kwargs dictionary
@@ -126,4 +134,4 @@ if __name__ == "__main__":
         )
         processed[f"temperature_{temp}"] = processed_shard
 
-    processed.push_to_hub("Eehan/eval-tldr-dpo-ppo-drpo-dm-sft-1000-cut")
+    processed.push_to_hub("Eehan/eval-tldr-dpo-ppo-drpo-dm-sft-1000-cut2")
