@@ -114,6 +114,7 @@ def main(script_args, training_args, model_args):
             for split in dataset.keys()  # Handles 'train', 'test', etc.
         })
     dataset = load_dataset(script_args.dataset_name, revision=script_args.dataset_config["revision"])
+    dataset = transform_dataset(dataset)
 
     ################
     # Training
