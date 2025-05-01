@@ -1,0 +1,39 @@
+output_dir: ./output/tldr/gpm/
+
+gradient_checkpointing: false
+model_and_preference_share_basemodel: true
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 5
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 5
+learning_rate: 5.0e-7
+max_length: 1024
+generate_temperature: 0.5
+beta: 0.05
+bf16: true
+dataset_num_proc: 1
+num_astar: 2
+num_astar: 2
+torch_empty_cache_steps: 1
+num_train_epochs: 1
+eval_steps: 500
+eval_strategy: "no"
+save_strategy: "steps"
+save_steps: 1000
+logging_steps: 50
+push_to_hub: false
+hub_model_id: kyleyee/EleutherAI_pythia-1b-deduped__drpo__tldr
+report_to: 
+  - wandb
+is_bt_model: false
+preference_model_id: ../results/pythia-1b-deduped_GMP_TLDR_2dim
+preference_model_kwargs:
+  indifferent: false
+  random: false
+  reverse: false
+ratio_processing: clip
+clipbound: 2.5
+forward_temperature: 0.5
+max_grad_norm: 0.25
+loss1_only: false
+loss2_only: false
