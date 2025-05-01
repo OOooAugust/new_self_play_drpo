@@ -75,6 +75,7 @@ def apply_chat_template(
     # Check that the example has the correct keys
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
     example_keys = {key for key in example.keys() if key in supported_keys}
+    
     if example_keys not in [
         {"messages"},  # language modeling
         {"prompt"},  # prompt-only
@@ -84,10 +85,11 @@ def apply_chat_template(
         {"prompt", "completion", "label"},  # unpaired preference
     ]:
         raise KeyError(f"Invalid keys in the example: {example_keys}")
-
+    #eos_token = tokenizer.eos_token
     # Apply the chat template to the whole conversation
     if "messages" in example:
         messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False)
+    #    messages += eos_token
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
@@ -115,22 +117,26 @@ def apply_chat_template(
                 example["prompt"] + example["chosen"], tools=tools, tokenize=False
             )
             chosen = prompt_chosen[len(prompt) :]
+        #    chosen+= eos_token
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
                 example["prompt"] + example["rejected"], tools=tools, tokenize=False
             )
             rejected = prompt_rejected[len(prompt) :]
+        #    rejected+= eos_token
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
                 example["prompt"] + example["completion"], tools=tools, tokenize=False
             )
             completion = prompt_completion[len(prompt) :]
+        #    completion += eos_token
     else:  # implicit prompt case
         if "chosen" in example:
             chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
+        #    chosen += eos_token
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(example["rejected"], tools=tools, tokenize=False)
-
+        #    rejected += eos_token
     # Ensure that the prompt is the initial part of the prompt-completion string
     if "prompt" in example:
         error_message = (

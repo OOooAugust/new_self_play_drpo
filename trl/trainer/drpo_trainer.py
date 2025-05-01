@@ -88,6 +88,10 @@ class DataCollatorDRPO(DataCollatorMixin):
         output["a1_attention_mask"] = pad(a1_attention_mask, padding_value = 0, padding_side = "right")
         output["a2_ids"] = pad(a2_ids, padding_value = self.pad_token_id, padding_side = "right")
         output["a2_attention_mask"] = pad(a2_attention_mask, padding_value = 0, padding_side = "right")
+        # output["a1_ids"] = pad(a1_ids, padding_value = self.pad_token_id, padding_side = "left")
+        # output["a1_attention_mask"] = pad(a1_attention_mask, padding_value = 0, padding_side = "left")
+        # output["a2_ids"] = pad(a2_ids, padding_value = self.pad_token_id, padding_side = "left")
+        # output["a2_attention_mask"] = pad(a2_attention_mask, padding_value = 0, padding_side = "left")
 
         if "preference_score" in examples[0]:
             output["preference_score"] = torch.tensor([example["preference_score"] for example in examples])
@@ -261,8 +265,8 @@ def apply_chat_template(
         output["a1"] = a1
     if "a2" in example:
         output["a2"] = a2
-    if "label" in example:
-        output["label"] = example["label"]
+    # if "rank" in example:
+    #     output["rank"] = example["rank"]
 
     return output    
 
@@ -503,7 +507,7 @@ class DRPOTrainer(Trainer):
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens_for_prompt": False,
-                    "eos_after_completion": args.model_and_preference_share_basemodel
+                    "eos_after_completion": args.eos_after_completion,
                 },
                 **map_kwargs,
             )
@@ -614,6 +618,8 @@ class DRPOTrainer(Trainer):
                 input_ids=prompt_ids,
                 attention_mask=prompt_attention_mask,
                 generation_config = self.generation_config,
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_token_id,
             )
 
         completion_ids = output[:, prompt_ids.shape[1]:]
@@ -695,8 +701,10 @@ class DRPOTrainer(Trainer):
                     if self.args.missing_eos_penalty is not None:
                         preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
                     
-                    generated_examples = self.processing_class.batch_decode(prompt_astar_ids[0,:], skip_special_tokens=True)
-                    print("generated_examples: ", generated_examples)
+                    generated_examples = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+                    # print things in format: if see user/assistant make the output green
+
+                    print("\033[1m\033[34generated_examples:\033[0m]", generated_examples[0].replace("user", "\033[32muser\033[0m").replace("assistant", "\033[35massistant\033[0m"))
 
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
                 if not args.loss2_only:

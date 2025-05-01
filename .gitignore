@@ -4,6 +4,8 @@
 .gitconfig
 *.bak
 *.log
+*.csv
+*.json
 *~
 ~*
 _tmp*
@@ -147,4 +149,5 @@ nbs/wandb/
 examples/notebooks/wandb/
 wandb/
 
+#output
 output/

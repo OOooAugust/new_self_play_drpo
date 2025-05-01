@@ -420,7 +420,7 @@ class SFTTrainer(Trainer):
 
                 def tokenize(example, processing_class, dataset_text_field):
                     return processing_class(example[dataset_text_field])
-
+                print("example of input after trainer processing", dataset[0])
                 dataset = dataset.map(
                     tokenize,
                     fn_kwargs={"processing_class": processing_class, "dataset_text_field": args.dataset_text_field},

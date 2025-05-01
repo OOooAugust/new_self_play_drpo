@@ -65,7 +65,7 @@ if __name__ == "__main__":
 
     dataset = dataset.remove_columns(["rank", "a1", "a2"])
     dataset = deduplicate_consecutive_dataset(dataset)
-    dataset = dataset.select(range(1000))
+    dataset = dataset.shuffle(seed=36).select(range(3000))
 
     temperatures = [0, 0.25, 0.5,0.75,1.0]
 

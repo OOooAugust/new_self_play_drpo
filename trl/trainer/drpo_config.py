@@ -173,6 +173,11 @@ class DRPOConfig(TrainingArguments):
         metadata={"help": "Model ID of the preference model."},
     )
 
+    preference_model_revision: Optional[str] = field(
+        default=None,
+        metadata={"help": "Revision of the preference model."},
+    )
+
     ratio_processing: Union[str, None] = field(
         default=None,
         metadata={"help": "Processing method for the Importance Sampling ratio. if clip, you need better to provide the clipbound. "
@@ -197,6 +202,11 @@ class DRPOConfig(TrainingArguments):
     loss2_only: bool = field(
         default=False,
         metadata={"help": "Whether to only use the loss2."},
+    )
+
+    eos_after_completion: bool = field(
+        default=False,
+        metadata={"help": "Whether to add eos token after the completion., choose False when your data applies chat template, choose True when your data is not and you want your generation contain the eos"},
     )
 
 

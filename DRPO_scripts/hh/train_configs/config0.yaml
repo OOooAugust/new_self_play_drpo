@@ -1,11 +1,9 @@
-output_dir: ./output/tldr/0/
+output_dir: ./output/hh/0/
 
 gradient_checkpointing: false
 model_and_preference_share_basemodel: true
-per_device_train_batch_size: 24
-gradient_accumulation_steps: 5
-per_device_train_batch_size: 24
-gradient_accumulation_steps: 5
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 16
 learning_rate: 5.0e-7
 max_length: 1024
 generate_temperature: 0.5
@@ -13,26 +11,26 @@ beta: 0.05
 bf16: true
 dataset_num_proc: 1
 num_astar: 2
-num_astar: 2
 torch_empty_cache_steps: 1
 num_train_epochs: 1
 eval_steps: 500
 eval_strategy: "no"
 save_strategy: "steps"
-save_steps: 1000
-logging_steps: 50
+save_steps: 500
+logging_steps: 5
 push_to_hub: false
-hub_model_id: kyleyee/EleutherAI_pythia-1b-deduped__drpo__tldr
+hub_model_id: Eehan/nothing_really_matters
 report_to: 
   - wandb
 is_bt_model: true
-preference_model_id: cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr
+preference_model_id: Kyleyee/Qwen2.5-1.5B-reward-hh-retrain
+preference_model_revision: f70cf091d59583749f030005b70834d29ba70fda
 preference_model_kwargs:
   indifferent: false
   random: false
   reverse: false
 ratio_processing: clip
-clipbound: 10.0
+clipbound: 5.0
 forward_temperature: 0.5
 max_grad_norm: 0.25
 loss1_only: false

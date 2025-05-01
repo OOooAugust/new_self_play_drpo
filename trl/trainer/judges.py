@@ -360,6 +360,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
     def __init__(
         self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 100000000
+        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 100000000
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
@@ -480,6 +481,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
                         return -1
                 except openai.RateLimitError as err:
                     wait_time = 0.5 * (2 ** retries)  
+                    wait_time = 0.5 * (2 ** retries)  
                     logging.warning(f"Rate limit hit. Retrying in {wait_time:.2f} seconds...")
                     time.sleep(wait_time)
                     retries += 1
@@ -500,6 +502,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Return the ranks
         return ranks
+
 
 
 
