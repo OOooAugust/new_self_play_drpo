@@ -116,6 +116,9 @@ def main(script_args, training_args, model_args):
     dataset = load_dataset(script_args.dataset_name, revision=script_args.dataset_config["revision"])
     dataset = transform_dataset(dataset)
 
+    print(f"\033[32mLoaded dataset sample:\033[0m {dataset['train'][0]}")
+    print(f"\033[32mLoaded swapped dataset sample:\033[0m {dataset['train'][len(dataset['train'])-1]}")
+
     ################
     # Training
     ################
@@ -148,7 +151,7 @@ if __name__ == "__main__":
             model_name_or_path = "Kyleyee/Qwen2.5-1.5B-sft-hh-3e",
     )
 
-    with open("./DRPO_scripts/hh/train_configs/config0.yaml", "r") as f:
+    with open("./DRPO_scripts/hh/train_configs/config_gpm.yaml", "r") as f:
         training_args_config = yaml.safe_load(f)
 
     training_args = DRPOConfig(
