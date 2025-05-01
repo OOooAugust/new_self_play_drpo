@@ -57,7 +57,6 @@ Preferred: <"A" or "B">"""
 judge = OpenAIPairwiseJudge(model = "gpt-4o-mini", system_prompt=system_prompt)
 def evaluate_and_save(data, method_name, temp):
         results, reasons = judge.judge_with_reason(
-        results, reasons = judge.judge_with_reason(
             prompts=data["prompt"],
             completions=data["completions"]
         )
@@ -198,4 +197,3 @@ for temp in temperatures:
 
 results_df.to_csv("head_to_head_summary_results_6.csv", index=False)
 print("Clear by Spring")
-
