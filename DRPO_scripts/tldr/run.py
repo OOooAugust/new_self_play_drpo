@@ -35,7 +35,7 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from trl.trainer.drpo_utils import GPMPipeline, estDPOStylePipeline, BTRewardNetwork
+from trl.trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
 from trl.trainer import DRPOConfig, DRPOTrainer
 
 def main(script_args, training_args, model_args):
@@ -86,7 +86,8 @@ def main(script_args, training_args, model_args):
         else: 
             preference_pipeline = BTRewardNetwork(training_args.preference_model_id, pad_token_id=tokenizer.pad_token_id)
     else:
-        preference_pipeline = GPMPipeline(training_args.preference_model_id)
+        print("\033[33m++++++++++++++++++ using GPM ++++++++++++++++++\033[0m")
+        preference_pipeline = GPMwithRewardNetwork(training_args.preference_model_id)
 
     ################
     # Dataset
@@ -150,8 +151,8 @@ raw_dataset = load_dataset(raw_dataset_id, "default")
 dataset = transform_dataset(raw_dataset)
 
 
-print(f"Loaded dataset sample: {dataset['train'][0]}")
-print(f"Loaded swapped dataset sample: {dataset['train'][len(dataset['train'])-1]}")
+print(f"\033[32mLoaded dataset sample:\033[0m {dataset['train'][0]}")
+print(f"\033[32mLoaded swapped dataset sample:\033[0m {dataset['train'][len(dataset['train'])-1]}")
 
 script_args = ScriptArguments(
         dataset_name=raw_dataset_id,
@@ -163,7 +164,7 @@ model_args = ModelConfig(
         model_name_or_path = model_id,
 )
 
-with open("./DRPO_scripts/tldr/train_configs/config0.yaml", "r") as f:
+with open("./DRPO_scripts/tldr/train_configs/config_gpm.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(

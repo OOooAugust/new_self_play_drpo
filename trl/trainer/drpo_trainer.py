@@ -703,9 +703,10 @@ class DRPOTrainer(Trainer):
                     
                     generated_examples = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
                     # print things in format: if see user/assistant make the output green
-
-                    print("\033[1m\033[34generated_examples:\033[0m]", generated_examples[0].replace("user", "\033[32muser\033[0m").replace("assistant", "\033[35massistant\033[0m"))
-
+                    past_examples = self.processing_class.batch_decode(a2_ids, skip_special_tokens=True)
+                    print("\033[42mgenerated_examples:\033[0m", generated_examples[0].replace("user", "\033[32muser\033[0m").replace("assistant", "\033[35massistant\033[0m"))
+                    print("\033[43mreference_examples:\033[0m", past_examples[0].replace("user", "\033[32muser\033[0m").replace("assistant", "\033[35massistant\033[0m"))
+                    print("\033[46mpreference_score_star:\033[0m ", preference_score_star)
                     del (prompt_astar_ids, prompt_a2_repeated_ids, prompt_astar_attention_mask, prompt_a2_repeated_attention_mask)
                 if not args.loss2_only:
                     prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)

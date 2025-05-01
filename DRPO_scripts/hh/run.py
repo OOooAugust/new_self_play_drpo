@@ -23,7 +23,7 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from trl.trainer.drpo_utils import GPMPipeline, estDPOStylePipeline, BTRewardNetwork
+from trl.trainer.drpo_utils import GPMwithRewardNetwork, estDPOStylePipeline, BTRewardNetwork
 from trl.trainer import DRPOConfig, DRPOTrainer
 
 def main(script_args, training_args, model_args):
@@ -88,7 +88,7 @@ def main(script_args, training_args, model_args):
         else: 
             preference_pipeline = BTRewardNetwork(training_args.preference_model_id, revision=training_args.preference_model_revision)
     else:
-        preference_pipeline = GPMPipeline(training_args.preference_model_id)
+        preference_pipeline = GPMwithRewardNetwork(training_args.preference_model_id)
 
 
 

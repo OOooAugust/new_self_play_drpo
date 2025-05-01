@@ -428,15 +428,15 @@ class estDPOStylePipeline:
         return self
 
 
-def get_preference_score_without_decoding(preference_model, a1_iuput, a1_attention_mask, a2_input, a2_attention_mask, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
+def get_preference_score_without_decoding(preference_model, a1_iuput_ids, a1_attention_mask, a2_input_ids, a2_attention_mask, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
     if kwargs.get("indifferent", False):
         # return torch.zeros(len(a_1_iuput)).to(device)
-        return 0.5*torch.ones(len(a1_iuput)).to(device)
+        return 0.5*torch.ones(len(a1_iuput_ids)).to(device)
     if kwargs.get("random", False):
         # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
-        return torch.rand(len(a1_iuput)).to(device)
-    a1_reward = preference_model(a1_iuput, a1_attention_mask)
-    a2_reward = preference_model(a2_input, a2_attention_mask)
+        return torch.rand(len(a1_iuput_ids)).to(device)
+    a1_reward = preference_model(a1_iuput_ids, a1_attention_mask)
+    a2_reward = preference_model(a2_input_ids, a2_attention_mask)
     # print("a1_reward:", a1_reward.shape, a1_reward)
     # print("a2_reward:", a2_reward.shape, a2_reward)
     if is_bt_model:
