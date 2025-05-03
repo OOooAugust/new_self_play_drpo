@@ -786,10 +786,10 @@ class DRPOTrainer(Trainer):
                 prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
                 prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
 
-                prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=False)
-                print("prompt_aster:", prompt_astar[0])
-                prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=False)
-                print("prompt_a2:",prompt_a2[0])
+                prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+                print("\033[42mprompt_astar:\033[0m", prompt_astar[0])
+                prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
+                print("\033[43mprompt_a2:\033[0m",prompt_a2[0])
                 prompt_a2_repeated = prompt_a2 * self.args.num_astar
                 assert(len(prompt_astar) == len(prompt_a2_repeated))
                 # print("prompt_astar: ", prompt_astar)
@@ -800,6 +800,7 @@ class DRPOTrainer(Trainer):
                     prompt_astar, 
                     prompt_a2_repeated,
                     is_bt_model = self.args.is_bt_model,
+                    noisy = 0.2,
                     kwargs=self.args.preference_model_kwargs or {}
                 )
                 
@@ -818,14 +819,14 @@ class DRPOTrainer(Trainer):
                         prompt_a1, 
                         prompt_a2,
                         is_bt_model = self.args.is_bt_model,
+                        noisy = 0.2,
                         kwargs = self.args.preference_model_kwargs or {}
                     )
                 else:
                     # preference_score = inputs["preference_score"]
                     raise NotImplementedError("precompute_preference_score is not implemented yet.")
                 
-                print("preference_score_star: ", preference_score_star.shape, preference_score_star)
-                print("preference_score: ", preference_score.shape, preference_score)
+                print("\033[46mpreference_score_star:\033[0m", preference_score_star[0].item())
                 
                 del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
 
@@ -833,7 +834,7 @@ class DRPOTrainer(Trainer):
             assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
         
             logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
-            loss2 = -(logps_star * preference_score_star.clone().detach()).mean()
+            loss2 = -(logps_star * (preference_score_star.clone().detach() - 0.5 * torch.ones_like(logps_star))).mean()
             # print("loss2: ", loss2)
 
             # Compute the penalty term of kl divergence

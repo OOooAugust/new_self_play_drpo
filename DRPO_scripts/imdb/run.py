@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 import numpy as np
 import random
 import torch
-from datasets import Dataset, features, load_dataset, concatenate_datasets
+from datasets import Dataset, features, load_dataset, concatenate_datasets, DatasetDict
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -98,6 +98,50 @@ def main(script_args, training_args, model_args):
     # dataset = dataset.remove_columns(["label","text"])
     # print(f"Loaded dataset sample: {dataset['train'][0]}")
 
+    def transform_dataset(dataset):
+    # Process each split individually (train/test)
+        def process_split(split):
+            split_dataset = dataset[split]
+            split_dataset = split_dataset.rename_column("chosen", "a1")
+            split_dataset = split_dataset.rename_column("rejected", "a2")
+            split_dataset = split_dataset.remove_columns(["label", "text", "a_1", "a_2", "a_1_preference", "a_2_preference"])
+
+            # Original examples
+            original = split_dataset.map(lambda x: {**x, 'rank': int(random.random() < x['chosen_preference'])})
+            original = original.remove_columns(["chosen_preference","rejected_preference"])
+
+            # Swapped examples
+            swapped = original.map(lambda x: {
+                'a1': x['a2'],
+                'a2': x['a1'],
+                # 'rank': 1 - int(random.random() < x['chosen_preference']),
+                'rank': 1 - x['rank'],
+            })
+
+            return concatenate_datasets([original, swapped])
+
+        # Apply processing to all splits
+        return DatasetDict({
+            split: process_split(split).shuffle(seed=688)
+            for split in dataset.keys()  # Handles 'train', 'test', etc.
+        })
+
+    def extract_dialogue(examples: dict):
+        prompt = [" ".join(text.split()[:2]) for text in examples["prompt"]]
+        a1 = [" " + " ".join(text.split()[2:]) for text in examples["a1"]]
+        a2 = [" " + " ".join(text.split()[2:]) for text in examples["a2"]]
+        return {
+            "prompt": prompt,
+            "a1": a1,
+            "a2": a2,
+        }
+
+    raw_dataset = load_dataset(script_args.dataset_name, "default")
+    dataset = transform_dataset(raw_dataset)
+    dataset = dataset.map(extract_dialogue, batch_size=128,batched=True)
+
+    print(f"\033[32mLoaded and transformed dataset sample:\033[0m {dataset['train'][0]}")
+
     ##########
     # Training
     ################
@@ -125,66 +169,19 @@ def main(script_args, training_args, model_args):
 
 
 
-from datasets import DatasetDict, concatenate_datasets
-
-def transform_dataset(dataset):
-    # Process each split individually (train/test)
-    def process_split(split):
-        split_dataset = dataset[split]
-        split_dataset = split_dataset.rename_column("chosen", "a1")
-        split_dataset = split_dataset.rename_column("rejected", "a2")
-        split_dataset = split_dataset.remove_columns(["label", "text", "a_1", "a_2", "a_1_preference", "a_2_preference"])
-
-        # Original examples
-        original = split_dataset.map(lambda x: {**x, 'rank': int(random.random() < x['chosen_preference'])})
-        original = original.remove_columns(["chosen_preference","rejected_preference"])
-
-        # Swapped examples
-        swapped = original.map(lambda x: {
-            'a1': x['a2'],
-            'a2': x['a1'],
-            # 'rank': 1 - int(random.random() < x['chosen_preference']),
-            'rank': 1 - x['rank'],
-        })
-
-        return concatenate_datasets([original, swapped])
-
-    # Apply processing to all splits
-    return DatasetDict({
-        split: process_split(split)
-        for split in dataset.keys()  # Handles 'train', 'test', etc.
-    })
-
 ##################################
 
-model_id = "Kyleyee/Qwen2-0.5B-stf-imdb"
-raw_dataset_id = "Kyleyee/train_data_imdb_for_drdpo_preference"
-def extract_dialogue(examples: dict):
-        a1 = [" " + " ".join(text.split()[5:]) for text in examples["a1"]]
-        a2 = [" " + " ".join(text.split()[5:]) for text in examples["a2"]]
-        return {
-            "a1": a1,
-            "a2": a2,
-        }
-
-raw_dataset = load_dataset(raw_dataset_id, "default")
-dataset = transform_dataset(raw_dataset)
-dataset = dataset.map(extract_dialogue,batch_size=128,batched=True)
-
-print(f"Loaded dataset sample: {dataset['train'][0]}")
-
-
 script_args = ScriptArguments(
-        dataset_name=raw_dataset_id,
+        dataset_name="Kyleyee/train_data_imdb_for_drdpo_preference",
         dataset_train_split="train",
         dataset_test_split="test",
 )
 
 model_args = ModelConfig(
-        model_name_or_path = model_id,
+        model_name_or_path = "Kyleyee/Qwen2-0.5B-stf-imdb"
 )
 
-with open("./DRPO_scripts/imdb/train_configs/config11.yaml", "r") as f:
+with open("./DRPO_scripts/imdb/train_configs/config_noisyGT_refT.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(

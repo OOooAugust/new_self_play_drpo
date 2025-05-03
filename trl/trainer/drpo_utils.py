@@ -259,7 +259,7 @@ class GPMPipeline:
 
 
 
-def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")):
+def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), noisy=0.0):
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
     if kwargs.get("indifferent", False):
@@ -270,8 +270,8 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
         return torch.rand(len(a_1_iuput)).to(device)
     a1_reward = preference_model(a_1_iuput)
     a2_reward = preference_model(a_2_input)
-    print("a1_reward:", a1_reward.shape, a1_reward)
-    print("a2_reward:", a2_reward.shape, a2_reward)
+    # print("a1_reward:", a1_reward.shape, a1_reward)
+    # print("a2_reward:", a2_reward.shape, a2_reward)
     if is_bt_model:
         result = a1_reward - a2_reward
     else:
@@ -286,7 +286,7 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
                 transformed_a_1 = torch.matmul(a1_reward, R_matrix.T)
                 result = torch.bmm(transformed_a_1.view(a1_reward.shape[0], 1, preference_model.value_head_dim), a2_reward.view(a2_reward.shape[0], preference_model.value_head_dim, 1))
                 result = result.view(a1_reward.shape[0])  
-    p = F.sigmoid(result)
+    p = F.sigmoid(result) + noisy * (torch.randn_like(result))
     if kwargs.get("reverse", False):
         print("Attention: reverse the preference score is using")
         p = 1 - p
@@ -366,7 +366,7 @@ class BTwithRewardPipeline:
         return self     
 
 class estDPOStylePipeline:
-    def __init__(self, model_name_or_path: dict, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True, beta: float=0.1, max_length: int=512):
+    def __init__(self, model_name_or_path: dict, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=True, padding: bool=True, beta: float=0.05, max_length: int=512):
         """
         calculate preference by DPO-style estimation,
         given prompt_response, policy_model and the reference_model,

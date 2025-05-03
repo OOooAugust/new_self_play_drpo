@@ -13,12 +13,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-METHOD_NAME = "ppo"
-MODEL_NAME = "Kyleyee/Qwen2.5-1.5B-PPO-hh-kl-0.05"  
-OUTPUT_DATASET_NAME = "Kyleyee/eval_data_hh_sft_dpo_ppo"  
+METHOD_NAME = "drpo-asymtemp"
+MODEL_NAME = "Eehan/Qwen2.5-1.5B-drpo-hh-1.5e-temp-7525-beta-0.05"  
+OUTPUT_DATASET_NAME = "Eehan/eval-hh"
 INPUT_DATASET_NAME = "Kyleyee/train_data_Helpful_explicit_prompt"  
 INPUT_DATASET_SPLIT = "test"  
-DATASET_NEED_MERGE = "Kyleyee/evaluate-dataset-HH"
+DATASET_NEED_MERGE = "Eehan/eval-hh"
 TEMPERATURES = [0, 0.25, 0.5, 0.75, 1]  
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
