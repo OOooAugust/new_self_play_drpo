@@ -181,7 +181,7 @@ model_args = ModelConfig(
         model_name_or_path = "Kyleyee/Qwen2-0.5B-stf-imdb"
 )
 
-with open("./DRPO_scripts/imdb/train_configs/config_noisyGT_refT.yaml", "r") as f:
+with open("./DRPO_scripts/imdb/train_configs/config_noisyGT_refT_2.yaml", "r") as f:
     training_args_config = yaml.safe_load(f)
 
 training_args = DRPOConfig(

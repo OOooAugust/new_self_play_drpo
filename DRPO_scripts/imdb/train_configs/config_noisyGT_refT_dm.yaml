@@ -1,4 +1,4 @@
-output_dir: ./output/imdb/noisyGT_refT/1/
+output_dir: ./output/noisyGT_refT/1/
 
 gradient_checkpointing: false
 per_device_train_batch_size: 10
@@ -34,4 +34,4 @@ clipbound: 2.5
 forward_temperature: 0.75
 max_grad_norm: 1.0
 loss1_only: false
-loss2_only: false
+loss2_only: true
