@@ -13,8 +13,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-METHOD_NAME = "drpo-asymtemp"
-MODEL_NAME = "Eehan/Qwen2.5-1.5B-drpo-hh-1.5e-temp-7525-beta-0.05"  
+METHOD_NAME = "drpo-hh-gpm-4dim-0066004"
+MODEL_NAME = "Eehan/Qwen2.5-1.5B-drpo-hh-gpm-4dim-temp-0.66-beta-0.04"  
 OUTPUT_DATASET_NAME = "Eehan/eval-hh"
 INPUT_DATASET_NAME = "Kyleyee/train_data_Helpful_explicit_prompt"  
 INPUT_DATASET_SPLIT = "test"  
@@ -34,7 +34,7 @@ def generate_text(prompts, tokenizer, model, temperature):
     ).to(model.device)
     
     generate_kwargs = {
-        "max_new_tokens": 128,
+        "max_new_tokens": 256,
         "eos_token_id": tokenizer.eos_token_id,
         "pad_token_id": tokenizer.pad_token_id,
         "do_sample": temperature > 0,
@@ -51,12 +51,15 @@ def generate_text(prompts, tokenizer, model, temperature):
     generated_ids = outputs[:, inputs.input_ids.shape[1]:]
     return tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 
+def truncate_human(texts):
+    return [text.split("\n\nHuman")[0] for text in texts]
+
 def extract_dialogue(examples: dict, tokenizer, model, temperature: float) -> dict:
     prompts = examples["prompt"]
     chat_prompts = [apply_chat_template({"prompt": p}, tokenizer) for p in prompts]
     flat_prompts = [x["prompt"] for x in chat_prompts]
     responses = generate_text(flat_prompts, tokenizer, model, temperature)
-    
+    responses = truncate_human(responses)
     return {
         "generated_response": responses
     }
@@ -66,7 +69,7 @@ if __name__ == "__main__":
     dataset = load_dataset(INPUT_DATASET_NAME)[INPUT_DATASET_SPLIT]
     dataset_merge = load_dataset(DATASET_NEED_MERGE)
     dataset = dataset.remove_columns(["rejected", "chosen"])
-    
+    # dataset_merge = dataset_merge.remove_columns(["drdpo", "dpo_hinge", "drpo-hh-0.82e-0066004"])
 
     for temp in TEMPERATURES:
         processed_shard = dataset.map(
