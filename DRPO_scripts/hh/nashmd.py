@@ -34,7 +34,7 @@ if __name__ == "__main__":
     training_args = NashMDConfig(
         gradient_checkpointing=False,
         bf16=True,
-        per_device_train_batch_size=12,
+        per_device_train_batch_size=2,
         gradient_accumulation_steps=8,
         learning_rate=4e-7,
         logging_steps=5,
