@@ -117,9 +117,9 @@ data = merge_datasets_by_prompt(data, data2)
 print(data["temperature_0"].select(range(5)).to_pandas())
 
 
-temperatures = [0, 0.25, 0.5, 0.75, 1.0]
+temperatures = [0, 0.25, 0.5, 0.75, 1]
 all_indices = list(range(1000))
-random.shuffle(all_indices)  
+random.shuffle(all_indices, seed=66004)  
 num_samples_per_temp = len(all_indices) // len(data.keys())
 print(num_samples_per_temp)
 temp_indices = {
