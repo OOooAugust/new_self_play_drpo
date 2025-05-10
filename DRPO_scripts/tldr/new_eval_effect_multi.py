@@ -13,8 +13,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-METHOD_NAME = "drpo-gpm-6dim-0625004"
-MODEL_NAME = "Eehan/pythia-1b-deduped-tldr-gpm-2dim-temp-6025-beta-0.04"  
+METHOD_NAME = "drpo-0066004"
+MODEL_NAME = "Eehan/pythia-1b-deduped-tldr-drpo-base-1e-temp0.66-beta-0.04"  
 # METHOD_NAME = "dpo"
 # MODEL_NAME = "Kyleyee/pythia-1b-deduped-tldr-dpo"
 

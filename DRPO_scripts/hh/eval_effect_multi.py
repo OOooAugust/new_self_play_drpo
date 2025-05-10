@@ -13,8 +13,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-METHOD_NAME = "drpo-hh-gpm-4dim-0066004"
-MODEL_NAME = "Eehan/Qwen2.5-1.5B-drpo-hh-gpm-4dim-temp-0.66-beta-0.04"  
+METHOD_NAME = "drpo-hh-1e-0066004"
+MODEL_NAME = "Eehan/pythia-1b-deduped-hh-drpo-base-1e-temp0.66-beta-0.04"  
 OUTPUT_DATASET_NAME = "Eehan/eval-hh"
 INPUT_DATASET_NAME = "Kyleyee/train_data_Helpful_explicit_prompt"  
 INPUT_DATASET_SPLIT = "test"  
