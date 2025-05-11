@@ -38,7 +38,7 @@ def generate_text(prompts, tokenizer, model, temperature):
     ).to(model.device)
     
     generate_kwargs = {
-        "max_new_tokens": 64,
+        "max_new_tokens": 128,
         "eos_token_id": tokenizer.eos_token_id,
         "pad_token_id": tokenizer.pad_token_id,
         "do_sample": temperature > 0,
@@ -85,6 +85,7 @@ if __name__ == "__main__":
     # dataset = dataset.remove_columns(["rank", "a1", "a2"])
 
     dataset_merge = load_dataset(DATASET_NEED_MERGE)
+    dataset_merge = dataset_merge.remove_columns(["drpo-gpm-6dim-0625004","drpo-gpm-2dim-0067004"])
     # dataset_merge = DatasetDict()
 
     
