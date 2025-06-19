@@ -100,6 +100,8 @@ _import_structure = {
         "WinRateCallback",
         "XPOConfig",
         "XPOTrainer",
+        "DRPOTrainer",
+         "DRPOConfig",
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
