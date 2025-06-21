@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, pipeline,AutoModelForSequenceClassification
 import torch.nn.functional as F
+from llm_blender.pair_ranker.pairrm import DebertaV2PairRM
 from transformers import AutoTokenizer     
 import os
 from safetensors.torch import load_file
@@ -259,7 +260,7 @@ class GPMPipeline:
 
 
 
-def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), noisy=0.0):
+def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), noisy=0.0, inputs: Optional[List[str]] = None,):
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
     if kwargs.get("indifferent", False):
@@ -268,6 +269,13 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     if kwargs.get("random", False):
         # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
         return torch.rand(len(a_1_iuput)).to(device)
+    
+    if isinstance(preference_model.model, DebertaV2PairRM):
+        if not inputs:
+            raise ValueError("inputs should be provided when using DebertaV2PairRM")
+        logits = preference_model(inputs, a_1_iuput, a_2_input)
+        return torch.tensor(logits).sigmoid()
+    
     a1_reward = preference_model(a_1_iuput)
     a2_reward = preference_model(a_2_input)
     # print("a1_reward:", a1_reward.shape, a1_reward)
@@ -501,4 +509,46 @@ class BTRewardNetwork(nn.Module):
         self.device = device
         self.rm.to(device)
         return self
+
+class PariRMPipeline(nn.Module):
+    def __init__(self, 
+                 model_name_or_path, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), 
+                 source_max_length=128, 
+                 candidate_max_length=128):
+        super().__init__()
+        self.device = device
+        self.model = DebertaV2PairRM.from_pretrained(model_name_or_path, device_map="cuda:0").eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        self.candidate_max_length = candidate_max_length
+        self.source_max_length = source_max_length
+        self.source_prefix = "<|source|>"
+        self.cand1_prefix = "<|candidate1|>"
+        self.cand2_prefix = "<|candidate2|>"
+
+
+    def __call__(self, sources:List[str], candidate1s:List[str], candidate2s:List[str]):
+        try:
+            encodings = self.tokenize_pair(sources, candidate1s, candidate2s)
+            encodings = {k:v.to(self.device) for k,v in encodings.items()}
+            outputs = self.model(**encodings)
+            logits = outputs.logits.tolist()
+        finally:
+            torch.cuda.empty_cache()
+        return logits
+
+
+    def tokenize_pair(self, sources:List[str], candidate1s:List[str], candidate2s:List[str]):
+        ids = []
+        assert len(sources) == len(candidate1s) == len(candidate2s)
+        max_length = self.source_max_length + 2 * self.candidate_max_length
+        for i in range(len(sources)):
+            source_ids = self.tokenizer.encode(self.source_prefix + sources[i], max_length=self.source_max_length, truncation=True)
+            candidate_max_length = (max_length - len(source_ids)) // 2
+            candidate1_ids = self.tokenizer.encode(self.cand1_prefix + candidate1s[i], max_length=candidate_max_length, truncation=True)
+            candidate2_ids = self.tokenizer.encode(self.cand2_prefix + candidate2s[i], max_length=candidate_max_length, truncation=True)
+            ids.append(source_ids + candidate1_ids + candidate2_ids)
+        encodings = self.tokenizer.pad({"input_ids": ids}, return_tensors="pt", padding="max_length", max_length=max_length)
+        return encodings
+
+
     

@@ -6,6 +6,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any, Union, Optional, Callable, List, Tuple
+from llm_blender.pair_ranker.pairrm import DebertaV2PairRM
 from functools import wraps
 from packaging import version
 
