@@ -504,12 +504,11 @@ class BTRewardNetwork(nn.Module):
         self.rm.to(device)
         return self
 
-class PariRMPipeline(nn.Module):
+class PairRMPipeline:
     def __init__(self, 
                  model_name_or_path, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), 
                  source_max_length=128, 
                  candidate_max_length=128):
-        super().__init__()
         self.device = device
         self.model = DebertaV2PairRM.from_pretrained(model_name_or_path, device_map="cuda:0").eval()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
