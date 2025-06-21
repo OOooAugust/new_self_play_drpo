@@ -25,7 +25,7 @@ report_to:
 is_bt_model: false
 # preference_model_id: Kyleyee/Qwen2.5-1.5B-reward-hh-retrain
 # preference_model_revision: f70cf091d59583749f030005b70834d29ba70fda
-preference_model_id: ../results/gpm_hh_3e_4dim
+preference_model_id: 'Kyleyee/gpm_tldr_3e'
 preference_model_kwargs:
   indifferent: false
   random: false

@@ -260,7 +260,7 @@ class GPMPipeline:
 
 
 
-def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), noisy=0.0, inputs: Optional[List[str]] = None,):
+def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), noisy=0.0):
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")
     if kwargs.get("indifferent", False):
@@ -269,12 +269,6 @@ def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:boo
     if kwargs.get("random", False):
         # return (torch.rand(len(a_1_iuput)) - 0.5 * torch.ones(len(a_1_iuput))).to(device)
         return torch.rand(len(a_1_iuput)).to(device)
-    
-    if isinstance(preference_model.model, DebertaV2PairRM):
-        if not inputs:
-            raise ValueError("inputs should be provided when using DebertaV2PairRM")
-        logits = preference_model(inputs, a_1_iuput, a_2_input)
-        return torch.tensor(logits).sigmoid()
     
     a1_reward = preference_model(a_1_iuput)
     a2_reward = preference_model(a_2_input)
