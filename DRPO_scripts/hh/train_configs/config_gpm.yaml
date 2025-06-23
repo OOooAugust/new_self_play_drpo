@@ -1,8 +1,8 @@
 output_dir: ./output/hh/gpm/
 
 gradient_checkpointing: false
-model_and_preference_share_basemodel: true
-per_device_train_batch_size: 2
+model_and_preference_share_basemodel: False
+per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
 learning_rate: 5.0e-7
 max_length: 1024

@@ -784,52 +784,85 @@ class DRPOTrainer(Trainer):
             with torch.inference_mode():
                 # context_length = prompt_ids.size(1)
 
-                prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
-                prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
-
-                prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
-                print("\033[42mprompt_astar:\033[0m", prompt_astar[0])
-                prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
-                print("\033[43mprompt_a2:\033[0m",prompt_a2[0])
-                prompt_a2_repeated = prompt_a2 * self.args.num_astar
-                assert(len(prompt_astar) == len(prompt_a2_repeated))
-                # print("prompt_astar: ", prompt_astar)
-                
-                # g(y*, y', x)
-                preference_score_star= get_preference_score(
-                    self.preference_model, 
-                    prompt_astar, 
-                    prompt_a2_repeated,
-                    is_bt_model = self.args.is_bt_model,
-                    noisy = 0.2,
-                    kwargs=self.args.preference_model_kwargs or {}
-                )
-                
-                if args.missing_eos_penalty is not None:
-                    preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
-
-                
-                if not self.precompute_preference_score:
-                    # g(y, y', x)            
-                    prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
-                    prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=False)
-                    assert(len(prompt_a1) == len(prompt_a2))
+                if isinstance(self.preference_model, DebertaV2PairRM):
+                    prompts = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True).tolist()
+                    astar = self.processing_class.batch_decode(astar_ids, skip_special_tokens=True).tolist()
+                    a2 = self.processing_class.batch_decode(a2_ids, skip_special_tokens=True).tolist()
+                    assert(len(astar) == len(a2))
+                    logits_star = self.preference_model(
+                        prompts=prompts,
+                        astar=astar,
+                        a2=a2,
+                        is_bt_model = self.args.is_bt_model,
+                        kwargs=self.args.preference_model_kwargs or {}
+                    )
+                    preference_score_star = torch.tensor(logits_star).sigmoid()
+                    if self.args.missing_eos_penalty is not None:
+                        preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
                     
-                    preference_score = get_preference_score(
+                    if not self.precompute_preference_score:
+                        a1 = self.processing_class.batch_decode(a1_ids, skip_special_tokens=True).tolist()
+                        assert(len(a1) == len(a2))
+                        logits_a1 = self.preference_model(
+                            prompts=prompts,
+                            astar=a2,
+                            a2=a1,
+                            is_bt_model = self.args.is_bt_model,
+                            kwargs=self.args.preference_model_kwargs or {}
+                        )
+                        preference_score = torch.tensor(logits_a1).sigmoid()
+                    else:
+                        # preference_score = inputs["preference_score"]
+                        raise NotImplementedError("precompute_preference_score is not implemented yet.")
+                    del promopt_ids, astar_ids, a2_ids, prompts, astar, a2, logits_star, logits_a1
+
+                else:
+                    prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
+                    prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
+
+                    prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+                    print("\033[42mprompt_astar:\033[0m", prompt_astar[0])
+                    prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
+                    print("\033[43mprompt_a2:\033[0m",prompt_a2[0])
+                    prompt_a2_repeated = prompt_a2 * self.args.num_astar
+                    assert(len(prompt_astar) == len(prompt_a2_repeated))
+                    # print("prompt_astar: ", prompt_astar)
+                    
+                    # g(y*, y', x)
+                    preference_score_star= get_preference_score(
                         self.preference_model, 
-                        prompt_a1, 
-                        prompt_a2,
+                        prompt_astar, 
+                        prompt_a2_repeated,
                         is_bt_model = self.args.is_bt_model,
                         noisy = 0.2,
-                        kwargs = self.args.preference_model_kwargs or {}
+                        kwargs=self.args.preference_model_kwargs or {}
                     )
-                else:
-                    # preference_score = inputs["preference_score"]
-                    raise NotImplementedError("precompute_preference_score is not implemented yet.")
-                
-                print("\033[46mpreference_score_star:\033[0m", preference_score_star[0].item())
-                
-                del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
+                    
+                    if args.missing_eos_penalty is not None:
+                        preference_score_star[~contain_eos_token] -= self.args.missing_eos_penalty
+
+                    
+                    if not self.precompute_preference_score:
+                        # g(y, y', x)            
+                        prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
+                        prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=False)
+                        assert(len(prompt_a1) == len(prompt_a2))
+                        
+                        preference_score = get_preference_score(
+                            self.preference_model, 
+                            prompt_a1, 
+                            prompt_a2,
+                            is_bt_model = self.args.is_bt_model,
+                            noisy = 0.2,
+                            kwargs = self.args.preference_model_kwargs or {}
+                        )
+                    else:
+                        # preference_score = inputs["preference_score"]
+                        raise NotImplementedError("precompute_preference_score is not implemented yet.")
+                    
+                        print("\033[46mpreference_score_star:\033[0m", preference_score_star[0].item())
+                    
+                        del prompt_astar_ids, prompt_a2_ids, prompt_astar, prompt_a2, prompt_a2_repeated, prompt_a1_ids, prompt_a1
 
             # Compute the loss part two
             assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
