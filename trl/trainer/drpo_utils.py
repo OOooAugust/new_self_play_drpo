@@ -543,5 +543,10 @@ class PairRMPipeline:
         encodings = self.tokenizer.pad({"input_ids": ids}, return_tensors="pt", padding="max_length", max_length=max_length)
         return encodings
 
+    def to(self, device):
+        self.device = device
+        self.model.to(device)
+        return self
+
 
     
