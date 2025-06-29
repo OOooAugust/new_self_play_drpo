@@ -866,7 +866,8 @@ class DRPOTrainer(Trainer):
             assert per_token_logps_star.size(0) == batch_size * self.args.num_astar
         
             logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
-            loss2 = -(logps_star * (preference_score_star.clone().detach() - 0.5 * torch.ones_like(logps_star))).mean()
+            #loss2 = -(logps_star * (preference_score_star.clone().detach() - 0.5 * torch.ones_like(logps_star))).mean()
+            loss2 = (-logps_star * (preference_score_star.clone().detach())).mean()
             # print("loss2: ", loss2)
 
             # Compute the penalty term of kl divergence
@@ -886,7 +887,6 @@ class DRPOTrainer(Trainer):
             logps = (per_token_logps * a1_attention_mask).sum(1)
             ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
             # print("pi, ref:",logps_sum, ref_logps_sum)
-            
             
             if args.ratio_processing == "clip":
                 ratio = torch.exp(logps - ref_logps)
@@ -961,6 +961,9 @@ class DRPOTrainer(Trainer):
         loss = loss / self.args.gradient_accumulation_steps
 
         self.accelerator.backward(loss, **kwargs)
+
+        print ({'loss1': losses1.mean().item(), 'loss2': loss2.item(), 'preference_score': preference_score.mean().item(), 
+                'preference_score_star': preference_score_star.mean().item(), 'mean_kl': mean_kl.item(), 'logps': logps.mean().item(), 'logps_star': logps_star.mean().item()})
 
         return loss.detach()
     
