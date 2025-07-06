@@ -650,6 +650,10 @@ class DRPOTrainer(Trainer):
         # There is 1 offset, because the model predict the next token
         logits = output.logits[:, max(0, prompt_ids.size(1) - 1) : -1]
         logits /= temperature + 1e-7
+
+        if completion_ids.size(1) > logits.size(1):
+            completion_ids = completion_ids[:, : logits.size(1)]
+
         # print("_forward, logits.shape: ",logits.shape)
         # Take the completion tokens logp
         logps = selective_log_softmax(logits, completion_ids)
@@ -882,7 +886,9 @@ class DRPOTrainer(Trainer):
             mean_kl = kl_onpolicy_part.mean()
 
 
-
+            L_logits = per_token_logps.size(1)
+            if a1_attention_mask.size(1) > L_logits:
+                a1_attention_mask = a1_attention_mask[:, :L_logits]   # trim mask
             # Compute the loss part one
             logps = (per_token_logps * a1_attention_mask).sum(1)
             ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
@@ -962,8 +968,7 @@ class DRPOTrainer(Trainer):
 
         self.accelerator.backward(loss, **kwargs)
 
-        print ({'loss1': losses1.mean().item(), 'loss2': loss2.item(), 'preference_score': preference_score.mean().item(), 
-                'preference_score_star': preference_score_star.mean().item(), 'mean_kl': mean_kl.item(), 'logps': logps.mean().item(), 'logps_star': logps_star.mean().item()})
+
 
         return loss.detach()
     
