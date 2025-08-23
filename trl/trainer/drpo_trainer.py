@@ -9,7 +9,7 @@ from typing import Any, Union, Optional, Callable, List, Tuple
 from llm_blender.pair_ranker.pairrm import DebertaV2PairRM
 from functools import wraps
 from packaging import version
-
+from copy import deepcopy
 import transformers
 import torch.utils.data
 
@@ -609,16 +609,22 @@ class DRPOTrainer(Trainer):
 
         return self.accelerator.prepare(eval_dataloader)
     
-    def _generate(self, model, prompt_ids: torch.tensor, prompt_attention_mask: torch.tensor, num_astar:int = 1):
+    def _generate(self, model, prompt_ids: torch.tensor, prompt_attention_mask: torch.tensor, num_astar:int = 1, temperature:float | None = None):
         eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
         prompt_ids = prompt_ids.repeat(num_astar, 1)
         prompt_attention_mask = prompt_attention_mask.repeat(num_astar, 1)
+        gen_config = deepcopy(self.generation_config)
+        if temperature is not None:
+            if temperature > 0:
+                gen_config.do_sample = True
+            else:
+                gen_config.do_sample = False 
         with unwrap_model_for_generation(model, self.accelerator, gather_deepspeed3_params=False) as unwrapped_model:
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
                 attention_mask=prompt_attention_mask,
-                generation_config = self.generation_config,
+                generation_config = gen_config,
                 pad_token_id=pad_token_id,
                 eos_token_id=eos_token_id,
             )
@@ -649,7 +655,8 @@ class DRPOTrainer(Trainer):
 
         # There is 1 offset, because the model predict the next token
         logits = output.logits[:, max(0, prompt_ids.size(1) - 1) : -1]
-        logits /= temperature + 1e-7
+        if temperature > 0:
+            logits /= temperature + 1e-7
 
         if completion_ids.size(1) > logits.size(1):
             completion_ids = completion_ids[:, : logits.size(1)]
@@ -892,10 +899,11 @@ class DRPOTrainer(Trainer):
             # Compute the loss part one
             logps = (per_token_logps * a1_attention_mask).sum(1)
             ref_logps = (per_token_ref_logps * a1_attention_mask).sum(1)
+            a1_length = a1_attention_mask.sum(1)
             # print("pi, ref:",logps_sum, ref_logps_sum)
             
             if args.ratio_processing == "clip":
-                ratio = torch.exp(logps - ref_logps)
+                ratio = torch.exp((logps - ref_logps)/a1_length)
                 # print("ratio",ratio)
                 clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
                 losses1 =  - clipped_ratio.detach() * (rank - preference_score.clone()).detach() * logps
@@ -909,6 +917,48 @@ class DRPOTrainer(Trainer):
                 # print("ratio pi, ref:", ratio_nominator, ratio_denominator)
                 ratio = ratio_nominator / ratio_denominator
                 losses1 = - ratio.detach() * (rank - preference_score.clone()).detach() * logps
+
+
+            elif args.ratio_processing == 'normal_distribution':
+
+                #Assume ref_model and target_model share the same tokenizer -> did not retokenize when calculate logits of same response under target and ref
+                prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref = self._generate(self.ref_model, prompt_ids, prompt_attention_mask, num_astar = 1, temperature = 0)
+                per_token_logps_astar_ref_ref = self._forward(self.ref_model, prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref, temperature = 0)
+                logps_star_ref_ref = (per_token_logps_astar_ref_ref * astar_attention_mask_ref).sum(-1)
+                per_token_logps_astar_ref_target = self._forward(model, prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref, temperature = 0)
+                logps_star_ref_target = (per_token_logps_astar_ref_target * astar_attention_mask_ref).sum(-1)
+                mu_ref = -logps_star_ref_ref.mean() + logps_star_ref_target.mean()
+
+                prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target = self._generate(model, prompt_ids, prompt_attention_mask, num_astar = 1, temperature = 0)
+                per_token_logps_astar_target_ref = self._forward(self.ref_model, prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target, temperature = 0)
+                logps_star_target_ref = (per_token_logps_astar_target_ref * astar_attention_mask_target).sum(-1)
+                per_token_logps_astar_target_target = self._forward(self.model, prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target, temperature = 0)
+                logps_star_target_target = (per_token_logps_astar_target_target * astar_attention_mask_target).sum(-1)
+                mu_target = -logps_star_target_ref.mean() + logps_star_target_target.mean()
+
+
+                var = args.normal_variance
+                r = logps - ref_logps
+
+                print ({
+                    'dpo_reward_mean_ref':mu_ref.item(),
+                    'dpo_reward_mean_target':mu_target.item(),
+                    'variance':var,
+                    'reward_a1': r
+                })
+                dist_ref = torch.distributions.Normal(loc = mu_ref, scale = np.sqrt(var))
+                dist_target = torch.distributions.Normal(loc = mu_target, scale = np.sqrt(var))                
+                numerator = torch.exp(dist_target.log_prob(r))
+                denominator = torch.exp(dist_ref.log_prob(r))
+                ratio = numerator/denominator
+                print ({
+                    'ratio': ratio.mean().item(),
+                    'numerator': numerator.mean().item(),
+                    'denominator': denominator.mean().item()
+                })
+                losses1 = -ratio.detach() * (rank - preference_score.clone()).detach() * logps
+
+
 
             else:
                 ratio = torch.exp(logps - ref_logps)

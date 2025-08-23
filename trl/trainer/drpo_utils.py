@@ -258,8 +258,6 @@ class GPMPipeline:
         return self
 
 
-
-
 def get_preference_score(preference_model, a_1_iuput, a_2_input, is_bt_model:bool = True, kwargs: Optional[Dict] = None, device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), noisy=0.0):
     # print(a_1_iuput)
     # preference_model = GPMPipeline("Kyleyee/gpm_tldr_3e")

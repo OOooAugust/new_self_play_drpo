@@ -48,6 +48,14 @@ class DRPOConfig(TrainingArguments):
         }
     )
 
+    normal_variance: float = field(
+        default=1.0,
+        metadata={
+            "help": "Variance of reward under reference model, depending on the reward model ONLY"
+            "transformers.TrainingArguments."
+        }
+    )
+
     model_and_preference_share_basemodel: bool = field(
         default=False,
         metadata={"help": "Whether the model and preference model share the same base model (e.g. both from Qwen2.5 or Pythia...)"},
