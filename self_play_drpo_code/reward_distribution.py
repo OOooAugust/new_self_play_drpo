@@ -244,6 +244,7 @@ def get_expected_kl(
         # Teacher-forced next-token logprobs
         ref_logp = F.log_softmax(ref_logits[:, :-1, :], dim=-1)      # [B, T-1, V]
         tgt_logp = F.log_softmax(target_logits[:, :-1, :], dim=-1)   # [B, T-1, V]
+        tgt_p = tgt_logp.exp()
         labels   = input_ids[:, 1:]                                   # [B, T-1]
         mask     = attn_mask[:, 1:].to(ref_logp.dtype).clone()        # [B, T-1]
 
@@ -258,17 +259,14 @@ def get_expected_kl(
                     cut = min(cut, mask.shape[1])  # guard against extreme lengths
                     mask[i, :cut] = 0.0
 
-        # Gather log-prob at the *label* token only (no full-vocab sums)
-        ref_tok_lp = ref_logp.gather(-1, labels.unsqueeze(-1)).squeeze(-1)  # [B, T-1]
-        tgt_tok_lp = tgt_logp.gather(-1, labels.unsqueeze(-1)).squeeze(-1)  # [B, T-1]
-        tgt_tok_p = tgt_tok_lp.exp()
 
-        diff = (tgt_tok_p * (tgt_tok_lp - ref_tok_lp) * mask).sum(dim = 1)
+        per_token = (tgt_p * (tgt_logp - ref_logp)).sum(dim = -1)
+        diff = (per_token*mask).sum(dim = -1)
 
         seq_diff_all.append(diff.detach().cpu())
 
         # cleanup
-        del enc_full, enc_prompt, ref_logits, target_logits, ref_logp, tgt_logp, labels, mask, ref_tok_lp, tgt_tok_lp
+        del enc_full, enc_prompt, ref_logits, target_logits, ref_logp, tgt_logp, tgt_p, labels, mask
         if device == 'cuda':
             torch.cuda.empty_cache()
 
@@ -276,6 +274,7 @@ def get_expected_kl(
 
     
     return diff_list
+
 
 
 

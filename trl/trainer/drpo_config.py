@@ -48,8 +48,8 @@ class DRPOConfig(TrainingArguments):
         }
     )
 
-    normal_variance: float = field(
-        default=1.0,
+    standard_dev: float = field(
+        default=2.0,
         metadata={
             "help": "Variance of reward under reference model, depending on the reward model ONLY"
             "transformers.TrainingArguments."
@@ -76,12 +76,12 @@ class DRPOConfig(TrainingArguments):
     )
 
     max_new_tokens: int = field(
-        default=256,
+        default=1024,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     
     max_length: int = field(
-        default=256,
+        default=2048,
         metadata={
             "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
             "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "

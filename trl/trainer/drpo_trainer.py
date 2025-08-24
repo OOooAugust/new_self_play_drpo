@@ -616,10 +616,16 @@ class DRPOTrainer(Trainer):
         prompt_attention_mask = prompt_attention_mask.repeat(num_astar, 1)
         gen_config = deepcopy(self.generation_config)
         if temperature is not None:
+            gen_config.temperature = float(temperature)
             if temperature > 0:
                 gen_config.do_sample = True
+                gen_config.top_p = 1.0
+                gen_config.top_k = 50
             else:
-                gen_config.do_sample = False 
+                gen_config.do_sample = False
+                gen_config.top_p = None
+                gen_config.top_k = None
+                gen_config.penalty_alpha = None
         with unwrap_model_for_generation(model, self.accelerator, gather_deepspeed3_params=False) as unwrapped_model:
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
@@ -921,33 +927,73 @@ class DRPOTrainer(Trainer):
 
             elif args.ratio_processing == 'normal_distribution':
 
-                #Assume ref_model and target_model share the same tokenizer -> did not retokenize when calculate logits of same response under target and ref
-                prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref = self._generate(self.ref_model, prompt_ids, prompt_attention_mask, num_astar = 1, temperature = 0)
-                per_token_logps_astar_ref_ref = self._forward(self.ref_model, prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref, temperature = 0)
-                logps_star_ref_ref = (per_token_logps_astar_ref_ref * astar_attention_mask_ref).sum(-1)
-                per_token_logps_astar_ref_target = self._forward(model, prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref, temperature = 0)
-                logps_star_ref_target = (per_token_logps_astar_ref_target * astar_attention_mask_ref).sum(-1)
-                mu_ref = -logps_star_ref_ref.mean() + logps_star_ref_target.mean()
+                with torch.no_grad():
+                    prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref = \
+                        self._generate(self.ref_model, prompt_ids, prompt_attention_mask, num_astar=1, temperature=0)
 
-                prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target = self._generate(model, prompt_ids, prompt_attention_mask, num_astar = 1, temperature = 0)
-                per_token_logps_astar_target_ref = self._forward(self.ref_model, prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target, temperature = 0)
-                logps_star_target_ref = (per_token_logps_astar_target_ref * astar_attention_mask_target).sum(-1)
-                per_token_logps_astar_target_target = self._forward(self.model, prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target, temperature = 0)
-                logps_star_target_target = (per_token_logps_astar_target_target * astar_attention_mask_target).sum(-1)
-                mu_target = -logps_star_target_ref.mean() + logps_star_target_target.mean()
+                    per_token_logps_astar_ref_ref = self._forward(
+                        self.ref_model,
+                        prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref,
+                        astar_ids_ref, astar_attention_mask_ref, temperature=0
+                    )
+                    mask_ref_ref = astar_attention_mask_ref[:, :per_token_logps_astar_ref_ref.size(1)] \
+                                    .to(per_token_logps_astar_ref_ref.dtype)
+                    logps_star_ref_ref = (per_token_logps_astar_ref_ref * mask_ref_ref).sum(-1)
 
+                    # same A* scored by TARGET
+                    per_token_logps_astar_ref_target = self._forward(
+                        model,
+                        prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref,
+                        astar_ids_ref, astar_attention_mask_ref, temperature=0
+                    )
+                    mask_ref_tgt = astar_attention_mask_ref[:, :per_token_logps_astar_ref_target.size(1)] \
+                                    .to(per_token_logps_astar_ref_target.dtype)
+                    logps_star_ref_target = (per_token_logps_astar_ref_target * mask_ref_tgt).sum(-1)
 
-                var = args.normal_variance
+                    mu_ref = -logps_star_ref_ref.mean() + logps_star_ref_target.mean()
+
+                    del prompt_ids_repeated_ref, prompt_attention_mask_repeated_ref, astar_ids_ref, astar_attention_mask_ref, \
+                        per_token_logps_astar_ref_ref, logps_star_ref_ref, per_token_logps_astar_ref_target, logps_star_ref_target
+
+                    # ======== A* from TARGET ========
+                    prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target = \
+                        self._generate(model, prompt_ids, prompt_attention_mask, num_astar=1, temperature=0)
+
+                    per_token_logps_astar_target_ref = self._forward(
+                        self.ref_model,
+                        prompt_ids_repeated_target, prompt_attention_mask_repeated_target,
+                        astar_ids_target, astar_attention_mask_target, temperature=0
+                    )
+                    mask_tgt_ref = astar_attention_mask_target[:, :per_token_logps_astar_target_ref.size(1)] \
+                                    .to(per_token_logps_astar_target_ref.dtype)
+                    logps_star_target_ref = (per_token_logps_astar_target_ref * mask_tgt_ref).sum(-1)
+
+                    # same target A* scored by TARGET
+                    per_token_logps_astar_target_target = self._forward(
+                        model,
+                        prompt_ids_repeated_target, prompt_attention_mask_repeated_target,
+                        astar_ids_target, astar_attention_mask_target, temperature=0
+                    )
+                    mask_tgt_tgt = astar_attention_mask_target[:, :per_token_logps_astar_target_target.size(1)] \
+                                    .to(per_token_logps_astar_target_target.dtype)
+                    logps_star_target_target = (per_token_logps_astar_target_target * mask_tgt_tgt).sum(-1)
+
+                    mu_target = -logps_star_target_ref.mean() + logps_star_target_target.mean()
+
+                    del prompt_ids_repeated_target, prompt_attention_mask_repeated_target, astar_ids_target, astar_attention_mask_target, \
+                        per_token_logps_astar_target_ref, logps_star_target_ref, per_token_logps_astar_target_target, logps_star_target_target
+
+                std = args.standard_dev
                 r = logps - ref_logps
 
                 print ({
                     'dpo_reward_mean_ref':mu_ref.item(),
                     'dpo_reward_mean_target':mu_target.item(),
-                    'variance':var,
+                    'standard deviation':std,
                     'reward_a1': r
                 })
-                dist_ref = torch.distributions.Normal(loc = mu_ref, scale = np.sqrt(var))
-                dist_target = torch.distributions.Normal(loc = mu_target, scale = np.sqrt(var))                
+                dist_ref = torch.distributions.Normal(loc = mu_ref, scale = std)
+                dist_target = torch.distributions.Normal(loc = mu_target, scale = std)                
                 numerator = torch.exp(dist_target.log_prob(r))
                 denominator = torch.exp(dist_ref.log_prob(r))
                 ratio = numerator/denominator
