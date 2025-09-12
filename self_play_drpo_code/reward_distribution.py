@@ -201,8 +201,8 @@ def get_expected_kl(
     target_model,
     inputs,                    # list[[prompt, response], ...]
     device='cuda',
-    batch_size=8,
-    max_length=1024,
+    batch_size=4,
+    max_length=2048,
     response_only=False,        # if True, only score response tokens
 ):
     ref_model.to(device).eval()
@@ -288,7 +288,7 @@ if __name__ == '__main__':
     temperature = [0.1, 0.3, 0.5, 0.7, 1.0]
     total = 5000
     step = 10
-    prompt = ds['prompt'][0]
+    prompt = ds['prompt'][10000]
     logp_diff_dict = {}
     for t in temperature:
         outputs = []
@@ -300,5 +300,5 @@ if __name__ == '__main__':
         )
         logp_diff_dict[f'temperature_{t}'] = logp_diff
     logp_diff_ds = Dataset.from_dict(logp_diff_dict)
-    logp_diff_ds.push_to_hub('dpo_reward_dist_pi_theta')
+    logp_diff_ds.push_to_hub('dpo_reward_dist_pi_theta_prompt_3')
     
