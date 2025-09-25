@@ -48,11 +48,18 @@ class DRPOConfig(TrainingArguments):
         }
     )
 
-    standard_dev: float = field(
+    scale: float = field(
         default=2.0,
         metadata={
             "help": "Variance of reward under reference model, depending on the reward model ONLY"
             "transformers.TrainingArguments."
+        }
+    )
+    
+    dpo_beta: float = field(
+        default=0.1,
+        metadata={
+            "help": "beta used in training dpo model"
         }
     )
 
@@ -76,12 +83,12 @@ class DRPOConfig(TrainingArguments):
     )
 
     max_new_tokens: int = field(
-        default=1024,
+        default=512,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     
     max_length: int = field(
-        default=2048,
+        default=1024,
         metadata={
             "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
             "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "
@@ -148,11 +155,11 @@ class DRPOConfig(TrainingArguments):
     )
 
     max_prompt_length: Optional[int] = field(
-        default=1024,
+        default=512,
         metadata={"help": "Maximum length of the prompt."},
     )
     max_completion_length: Optional[int] = field(
-        default=1024,
+        default=512,
         metadata={"help": "Maximum length of the completion."},
     )
 
@@ -189,7 +196,13 @@ class DRPOConfig(TrainingArguments):
     ratio_processing: Union[str, None] = field(
         default=None,
         metadata={"help": "Processing method for the Importance Sampling ratio. if clip, you need better to provide the clipbound. "
-        "Options include `clip`, `self_normalize`, `None`. Default to None."},
+        "Options include `clip`, `self_normalize`, 'KL_divergence', `None`. Default to None."},
+    )
+
+    ratio_distribution: Union[str, None] = field(
+        default=None,
+        metadata={"help": "Processing method for the Importance Sampling ratio. if clip, you need better to provide the clipbound. "
+        "Options include `clip`, `self_normalize`, 'normal_distribution', 'laplace_distribution', `None`. Default to None."},
     )
 
     clipbound: Optional[float] = field(

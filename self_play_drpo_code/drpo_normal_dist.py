@@ -36,6 +36,7 @@ def process_split(original, seed = 42):
         'a2': x['a1'],
         # 'rank': 1 - int(random.random() < x['chosen_preference']),
         'rank': 1 - x['rank'],
+        'bias': x['bias']
     })
 
     return concatenate_datasets([original, swapped]).shuffle(seed=seed)
@@ -95,7 +96,7 @@ def load_model(model_path, task = 'generation', model_type = 'decoder', model_ca
 
 data_cache_path = "/workspace/dataset"
 model_cache_path = '/workspace/model_cache'
-ds_path = 'august66/drpo_hh_qwen2.5_1.5b'
+ds_path = 'august66/hh_qwen2.5_1.5b_with_bias_test_100'
 ref_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
 target_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
 dpo_policy_path = 'august66/hh_qwen_1.5b_dpo_model_2'

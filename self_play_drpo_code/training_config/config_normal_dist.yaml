@@ -17,7 +17,7 @@ eval_steps: 500
 eval_strategy: "no"
 hub_strategy: "every_save"
 save_strategy: "steps"
-save_steps: 200
+save_steps: 500
 logging_steps: 10
 push_to_hub: true
 hub_model_id: 'august66/hh_qwen1.5_drpo'
@@ -38,5 +38,6 @@ clipbound: 3.0
 forward_temperature: 1.0
 max_grad_norm: 0.25
 scale: 4.0
+dpo_beta: 0.1
 loss1_only: false
 loss2_only: false
