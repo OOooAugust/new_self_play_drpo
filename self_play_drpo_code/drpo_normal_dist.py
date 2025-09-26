@@ -96,10 +96,11 @@ def load_model(model_path, task = 'generation', model_type = 'decoder', model_ca
 
 data_cache_path = "/workspace/dataset"
 model_cache_path = '/workspace/model_cache'
-ds_path = 'august66/hh_qwen2.5_1.5b_with_bias_test_100'
+ds_path = 'august66/hh_qwen2.5_1.5b_with_bias'
 ref_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
 target_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
 dpo_policy_path = 'august66/hh_qwen_1.5b_dpo_model_2'
+train_split =  'train_chunk_00000'
 
 #load training argument for drpo
 with open("/workspace/Self_play_DRPO/self_play_drpo_code/training_config/config_normal_dist.yaml", "r") as f:
@@ -107,26 +108,24 @@ with open("/workspace/Self_play_DRPO/self_play_drpo_code/training_config/config_
 
 
 if __name__ == '__main__':
+    training_args = DRPOConfig(
+        **training_args_config
+    )
     seed = 1234
     ref_policy_model, ref_policy_tokenizer = load_model(ref_policy_path)
     target_policy_model, target_policy_tokenizer = load_model(target_policy_path)
     dpo_policy_model, dpo_policy_tokenizer = load_model(dpo_policy_path)
-    drpo_train = load_dataset(ds_path, cache_dir=data_cache_path, split = 'train')
+    preference_model, preference_model_tokenizer = load_model(training_args.preference_model_id, task = 'reward')
+    drpo_train = load_dataset(ds_path, cache_dir=data_cache_path, split = train_split)
+
     drpo_train = process_split(drpo_train)
     drpo_train = drpo_train.shuffle(seed=seed)
-
-    training_args = DRPOConfig(
-        **training_args_config
-    )
-    preference_pipeline = PairRMPipeline(
-        model_name_or_path = training_args.preference_model_id,
-    )
 
     trainer = DRPOTrainer(
         model=target_policy_model,
         ref_model=ref_policy_model,
         dpo_model = dpo_policy_model,
-        preference_model=preference_pipeline,
+        preference_model=preference_model,
         train_dataset = drpo_train,
         processing_class=ref_policy_tokenizer,
         args=training_args
