@@ -1025,10 +1025,10 @@ class DRPOTrainer(Trainer):
                     'bias':bias.mean().item()
                 })
                 if args.ratio_distribution == 'normal_distribution':
-                        ratio = torch.exp((-1/(2*scale*scale))*((r - mu_ref_correct)**2 + (r - mu_theta_correct)**2))
+                        ratio = torch.exp((-1/(2*scale*scale))*((r - mu_theta_correct)**2 - (r - mu_ref_correct)**2))
 
                 elif args.ratio_distribution == 'laplace_distribution':
-                        ratio = torch.exp((-1/scale)*(torch.abs(r - mu_ref_correct) + torch.abs(r - mu_theta_correct)))
+                        ratio = torch.exp((-1/(2*scale))*(torch.abs(r - mu_theta_correct) - torch.abs(r - mu_ref_correct)))
 
                 clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
 
