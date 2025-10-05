@@ -6,7 +6,7 @@ per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
 learning_rate: 5.0e-7
 max_length: 1024
-generate_temperature: 1.0
+generate_temperature: 0.88
 beta: 0.05
 bf16: true
 dataset_num_proc: 1
@@ -22,7 +22,7 @@ logging_steps: 10
 push_to_hub: true
 hub_model_id: 'august66/hh_qwen1.5_drpo'
 save_only_model: false
-save_total_limit: 3
+save_total_limit: 2
 report_to: 
   - wandb
 is_bt_model: true
@@ -35,9 +35,12 @@ preference_model_kwargs:
 ratio_processing: KL_divergence
 ratio_distribution: normal_distribution
 clipbound: 3.0
-forward_temperature: 1.0
+forward_temperature: 0.88
 max_grad_norm: 0.25
-scale: 4.0
+scale: 8.0
 dpo_beta: 0.1
-loss1_only: false
-loss2_only: false
+loss_type: 'IS'
+learn_mu_parameters: true
+mu_value_hidden_size: 64
+mu_value_coef: 1.0
+learn_mu_parameters: true

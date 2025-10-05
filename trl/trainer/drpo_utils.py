@@ -316,7 +316,7 @@ class BTwithRewardPipeline:
             reward_model_id,
             torch_dtype=torch.bfloat16,
             device_map=device,
-            attn_implementation="flash_attention_2",
+            #attn_implementation="flash_attention_2",
             num_labels=1,
         )
         self.rm_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)

@@ -198,6 +198,11 @@ class DRPOConfig(TrainingArguments):
         metadata={"help": "Processing method for the Importance Sampling ratio. if clip, you need better to provide the clipbound. "
         "Options include `clip`, `self_normalize`, 'KL_divergence', `None`. Default to None."},
     )
+    
+    loss_type: Union[str, None] = field(
+        default='full',
+        metadata={"help": "type of loss used to train the model, if IS, then use IS loss only. If full, use whole loss as in the paper"},
+    )
 
     ratio_distribution: Union[str, None] = field(
         default=None,
@@ -210,20 +215,26 @@ class DRPOConfig(TrainingArguments):
         metadata={"help": "Clip upper bound for the Importance Sampling ratio, default to 10.0."},
     )
 
+    learn_mu_parameters: bool = field(
+        default=False,
+        metadata={"help": "Whether to learn mu_ref and mu_theta using auxiliary value networks instead of relying solely on the analytical KL-based estimates."},
+    )
+
+    mu_value_hidden_size: int = field(
+        default=64,
+        metadata={"help": "Hidden layer size for the auxiliary value networks that estimate mu_ref and mu_theta."},
+    )
+
+    mu_value_coef: float = field(
+        default=1.0,
+        metadata={"help": "Scaling coefficient applied to the auxiliary mu value network losses before adding them to the main DRPO objective."},
+    )
+
     forward_temperature: Optional[float] = field(
         default=1.0,
         metadata={"help": "Temperature for the forward pass of the model and ref_model."},
     )
 
-    loss1_only: bool = field(
-        default=False,
-        metadata={"help": "Whether to only use the loss1."},
-    )
-    
-    loss2_only: bool = field(
-        default=False,
-        metadata={"help": "Whether to only use the loss2."},
-    )
 
     eos_after_completion: bool = field(
         default=False,

@@ -28,7 +28,7 @@ from trl import (
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 from trl.data_utils import apply_chat_template
-from trl.trainer.drpo_utils import PairRMPipeline
+from trl.trainer.drpo_utils import PairRMPipeline, BTwithRewardPipeline
 
 def process_split(original, seed = 42):
     swapped = original.map(lambda x: {
@@ -36,7 +36,6 @@ def process_split(original, seed = 42):
         'a2': x['a1'],
         # 'rank': 1 - int(random.random() < x['chosen_preference']),
         'rank': 1 - x['rank'],
-        'bias': x['bias']
     })
 
     return concatenate_datasets([original, swapped]).shuffle(seed=seed)
@@ -100,7 +99,6 @@ ds_path = 'august66/hh_qwen2.5_1.5b_with_bias'
 ref_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
 target_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
 dpo_policy_path = 'august66/hh_qwen_1.5b_dpo_model_2'
-train_split =  'train_chunk_00000'
 
 #load training argument for drpo
 with open("/workspace/Self_play_DRPO/self_play_drpo_code/training_config/config_normal_dist.yaml", "r") as f:
@@ -115,8 +113,9 @@ if __name__ == '__main__':
     ref_policy_model, ref_policy_tokenizer = load_model(ref_policy_path)
     target_policy_model, target_policy_tokenizer = load_model(target_policy_path)
     dpo_policy_model, dpo_policy_tokenizer = load_model(dpo_policy_path)
-    preference_model, preference_model_tokenizer = load_model(training_args.preference_model_id, task = 'reward')
-    drpo_train = load_dataset(ds_path, cache_dir=data_cache_path, split = train_split)
+    preference_pipeline = BTwithRewardPipeline(training_args.preference_model_id, training_args.preference_model_id)
+    ds_dict = load_dataset(ds_path, cache_dir=data_cache_path)
+    drpo_train = concatenate_datasets(list(ds_dict.values()))   
 
     drpo_train = process_split(drpo_train)
     drpo_train = drpo_train.shuffle(seed=seed)
@@ -125,7 +124,7 @@ if __name__ == '__main__':
         model=target_policy_model,
         ref_model=ref_policy_model,
         dpo_model = dpo_policy_model,
-        preference_model=preference_model,
+        preference_model=preference_pipeline,
         train_dataset = drpo_train,
         processing_class=ref_policy_tokenizer,
         args=training_args
