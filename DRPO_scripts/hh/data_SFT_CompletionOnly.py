@@ -96,6 +96,11 @@ if __name__ == "__main__":
 
     # Push to Hub
     if script_args.push_to_hub:
-        dataset.push_to_hub(script_args.repo_id,token= "HUGGINGFACE_TOKEN_REDACTED")
-        model_card.push_to_hub(script_args.repo_id, repo_type="dataset", token= "HUGGINGFACE_TOKEN_REDACTED")
+        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
+        if token is None:
+            raise RuntimeError(
+                "Hugging Face token not found. Set HF_TOKEN or HUGGINGFACE_TOKEN in the environment before pushing."
+            )
+        dataset.push_to_hub(script_args.repo_id, token=token)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset", token=token)
         print(f"Pushed new dataset to {script_args.repo_id}")
