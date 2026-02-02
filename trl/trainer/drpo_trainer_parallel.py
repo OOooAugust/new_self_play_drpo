@@ -2,6 +2,7 @@ from typing import Any, Union, Optional, Callable, List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from transformers import (
     DataCollator,
     GenerationConfig,
@@ -9,12 +10,13 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainerCallback,
-    is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import seed_worker
 from .drpo_config import DRPOConfig
 from ..models.utils import unwrap_model_for_generation
 from datasets import Dataset, IterableDataset
+from torch.utils.data import DataLoader
 from .utils import (
     pad,
     truncate_right,
@@ -23,6 +25,7 @@ from .utils import (
 )
 from .drpo_utils import get_preference_score
 from dataclasses import dataclass
+from accelerate import PartialState
 
 
 @dataclass
@@ -58,15 +61,81 @@ class DataCollatorDRPO(DataCollatorMixin):
         return output
 
 
+def is_conversational(example: dict[str, Any]) -> bool:
+    for key in ("prompt", "a1", "a2"):
+        value = example.get(key)
+        if not isinstance(value, list) or not value:
+            continue
+        first_msg = value[0]
+        if isinstance(first_msg, dict) and "role" in first_msg and "content" in first_msg:
+            return True
+    return False
+
+
+
+def apply_chat_template(
+    example: dict[str, list[dict[str, str]]],
+    tokenizer: PreTrainedTokenizerBase
+) -> dict[str, str]:
+    
+    if not all(key in example for key in ["prompt", "a1", "a2"]):
+        raise KeyError(f"Example must contain 'prompt', 'a1', and 'a2' keys. Got: {list(example.keys())}")
+
+
+    last_role = example["prompt"][-1]["role"]
+    if last_role == "user":
+        add_generation_prompt = True
+        continue_final_message = False
+    elif last_role == "assistant":
+        add_generation_prompt = False
+        continue_final_message = True
+    else:
+        raise ValueError(f"Invalid role in the last message: {last_role}")
+
+    prompt = tokenizer.apply_chat_template(
+        example["prompt"],
+        continue_final_message=continue_final_message,
+        tokenize=False,
+        add_generation_prompt=add_generation_prompt,
+    )
+
+
+    def extract_completion(response_key: str) -> str:
+        full_text = tokenizer.apply_chat_template(
+            example["prompt"] + example[response_key], tokenize=False
+        )
+        if not full_text.startswith(prompt):
+            raise ValueError(
+                f"Chat template for prompt + {response_key} does not start with prompt. "
+                "This may indicate an unsupported chat template."
+            )
+        return full_text[len(prompt):]
+
+    return {
+        "prompt": prompt,
+        "a1": extract_completion("a1"),
+        "a2": extract_completion("a2"),
+    }
+
+
+def maybe_apply_chat_template(
+    example: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> dict[str, str]:
+    if is_conversational(example):
+        return apply_chat_template(example, tokenizer)
+    return example
+
+
 class DRPOTrainer(Trainer):
     def __init__(
         self,
         model: PreTrainedModel,
         ref_model: Union[PreTrainedModel, nn.Module],
         preference_model: Union[PreTrainedModel, nn.Module],
-        dpo_as_reward: False, 
-        dpo_model: Union[PreTrainedModel, nn.Module, None],
         args: DRPOConfig,
+        dpo_as_reward: False, 
+        dpo_model: Union[PreTrainedModel, nn.Module, None] = None,
         train_dataset: Optional[Dataset] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
         data_collator: Optional[DataCollatorDRPO] = None, 
@@ -212,29 +281,67 @@ class DRPOTrainer(Trainer):
                 'ref_ids',
                 'ref_attention_mask'
             ]
+
     
+    def get_train_dataloader(self) -> DataLoader:
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+        
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+
+        dataloader_params = {
+            "batch_size": self.args.train_batch_size,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+    
+
+
+
+
+
 
     def _prepare_dataset(self,
                          dataset: Union[Dataset, IterableDataset],
                          processing_class: PreTrainedTokenizerBase,
                          args: DRPOConfig) -> Union[Dataset, IterableDataset]:
         
-        map_kwargs = {'writer_batch_size':10}
+        map_kwargs = {'writer_batch_size': 10}
         if isinstance(dataset, Dataset):
             map_kwargs['num_proc'] = args.dataset_num_proc
-        
-        dataset = dataset.map(
-            self.tokenize_row, 
-            remove_columns = ['prompt', 'a1', 'a2', 'ref'],
-            fn_kwargs = {
-                'processing_class': processing_class,
-                'max_prompt_length': args.max_prompt_length,
-                'max_completion_length':args.max_completion_length,
-                'add_special_tokens_for_prompt': False, 
-                'eos_after_completion': args.eos_after_completion
-            },
-            **map_kwargs
-        )
+
+        with PartialState().local_main_process_first():
+            # Step 1: Apply chat template if data is in conversational format
+            dataset = dataset.map(
+                maybe_apply_chat_template,
+                fn_kwargs={'tokenizer': processing_class},
+                **map_kwargs
+            )
+
+            # Step 2: Tokenize the dataset
+            dataset = dataset.map(
+                self.tokenize_row, 
+                remove_columns=['prompt', 'a1', 'a2', 'ref'],
+                fn_kwargs={
+                    'processing_class': processing_class,
+                    'max_prompt_length': args.max_prompt_length,
+                    'max_completion_length': args.max_completion_length,
+                    'add_special_tokens_for_prompt': False, 
+                    'eos_after_completion': args.eos_after_completion
+                },
+                **map_kwargs
+            )
         return dataset 
     
 
@@ -480,6 +587,7 @@ class DRPOTrainer(Trainer):
         
         loss += losses1.mean() + self.args.beta * mean_kl
         loss = loss / self.args.gradient_accumulation_steps
+
         self.accelerator.backward(loss)
 
         #logging

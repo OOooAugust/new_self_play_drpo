@@ -145,14 +145,6 @@ class DRPOConfig(TrainingArguments):
             "help": "Number of newly generated completions to compare with the reference model."
         }
     )
-    
-    tools: Optional[list[Union[dict, Callable]]] = field(
-        default=None,
-        metadata={
-            "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
-            "not support function calling, this argument will have no effect."
-        },
-    )
 
     max_prompt_length: Optional[int] = field(
         default=512,
