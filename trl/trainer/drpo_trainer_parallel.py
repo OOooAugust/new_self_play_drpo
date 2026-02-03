@@ -127,7 +127,7 @@ def maybe_apply_chat_template(
     return example
 
 
-class DRPOTrainer(Trainer):
+class DRPOTrainerParallel(Trainer):
     def __init__(
         self,
         model: PreTrainedModel,
@@ -149,7 +149,7 @@ class DRPOTrainer(Trainer):
         if preference_model is None:
             raise ValueError('preference model cannot be None')
         self.preference_model = preference_model
-        self.preference_model.eval()  #double check, do I need to train preference model in the training step?
+        self.preference_model
 
         if dpo_as_reward and dpo_model is None: 
             raise ValueError('dpo model cannot be None if use dpo as reward')
@@ -458,7 +458,8 @@ class DRPOTrainer(Trainer):
     def training_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]]
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        num_items_in_batch: Optional[int]=None
     ) -> torch.Tensor:
         
         model.train()
@@ -608,10 +609,38 @@ class DRPOTrainer(Trainer):
 
 
 
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None, learning_rate=None):
+        # Logging
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            tr_loss -= tr_loss  # reset to zero
 
+            logs = {
+                "loss": round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4),
+                "learning_rate": self._get_learning_rate(),
+            }
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
 
+            # Average and reset DRPO-specific stats
+            logs.update({k: sum(v) / len(v) for k, v in self.stats.items() if v})
+            self.stats = {k: [] for k in self.stats}
 
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+            self.log(logs, start_time) if start_time else self.log(logs)
 
+        # Evaluation
+        if self.control.should_evaluate:
+            metrics = self._evaluate(trial, ignore_keys_for_eval)
+            if self.args.save_strategy == "best":
+                self.control.should_save = self._determine_best_metric(metrics, trial)
+
+        # Checkpointing
+        if self.control.should_save:
+            self._save_checkpoint(model, trial)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
         
     

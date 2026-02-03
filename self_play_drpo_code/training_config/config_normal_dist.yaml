@@ -40,7 +40,6 @@ max_grad_norm: 0.25
 scale: 8.0
 dpo_beta: 0.1
 loss_type: 'IS'
-learn_mu_parameters: true
+learn_mu_parameters: false
 mu_value_hidden_size: 64
 mu_value_coef: 1.0
-learn_mu_parameters: true

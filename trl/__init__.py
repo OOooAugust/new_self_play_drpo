@@ -102,6 +102,7 @@ _import_structure = {
         "XPOTrainer",
         "DRPOTrainer",
         "DRPOConfig",
+        "DRPOTrainerParallel"
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
