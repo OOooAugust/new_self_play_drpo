@@ -4,7 +4,7 @@ gradient_checkpointing: false
 model_and_preference_share_basemodel: false
 per_device_train_batch_size: 4
 gradient_accumulation_steps: 4
-learning_rate: 1.0e-6
+learning_rate: 1.0e-7
 max_new_tokens: 512
 max_length: 1024
 generate_temperature: 1.0
@@ -27,7 +27,7 @@ save_total_limit: 2
 report_to: 
   - wandb
 is_bt_model: true
-preference_model_id: 'Kyleyee/Qwen2.5-1.5B-reward-hh-retrain'
+preference_model_id: "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/output/reward_qwen25_hh_helpful"
 #preference_model_revision: f70cf091d59583749f030005b70834d29ba70fda dd
 preference_model_kwargs:
   indifferent: false

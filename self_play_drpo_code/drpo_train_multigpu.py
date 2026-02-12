@@ -92,8 +92,8 @@ def main():
     
     # Load models
     print(f"[Rank {local_rank}] Loading models...")
-    ref_policy_model, ref_policy_tokenizer = load_model("Qwen/Qwen2.5-1.5B-Instruct")
-    target_policy_model, _ = load_model("Qwen/Qwen2.5-1.5B-Instruct")
+    ref_policy_model, ref_policy_tokenizer = load_model("/root/autodl-tmp/outputs/qwen_2.5_1.5b_hh_helpfulness_sft")
+    target_policy_model, _ = load_model("/root/autodl-tmp/outputs/qwen_2.5_1.5b_hh_helpfulness_sft")
     dpo_policy_model, _ = load_model('august66/hh_qwen_1.5b_dpo_model_2')
     print(f"[Rank {local_rank}] Models loaded")
     
