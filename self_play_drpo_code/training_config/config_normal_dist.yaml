@@ -8,7 +8,7 @@ learning_rate: 1.0e-7
 max_new_tokens: 512
 max_length: 1024
 generate_temperature: 1.0
-beta: 0.03
+beta: 0.1
 bf16: true
 dataset_num_proc: 1
 num_astar: 1
@@ -19,15 +19,15 @@ eval_strategy: "no"
 hub_strategy: "every_save"
 save_strategy: "steps"
 save_steps: 1000
-logging_steps: 5
+logging_steps: 2
 push_to_hub: true
 hub_model_id: 'august66/hh_qwen1.5_drpo'
 save_only_model: false
-save_total_limit: 2
+save_total_limit: 1
 report_to: 
   - wandb
 is_bt_model: true
-preference_model_id: "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/output/reward_qwen25_hh_helpful"
+preference_model_id: "Skywork/Skywork-Reward-Llama-3.1-8B-v0.2"
 #preference_model_revision: f70cf091d59583749f030005b70834d29ba70fda dd
 preference_model_kwargs:
   indifferent: false

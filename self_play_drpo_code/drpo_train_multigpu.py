@@ -47,7 +47,7 @@ def load_model(model_path, task='generation', model_type='decoder',
     
     model_tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, padding_side=padding_side,
-        truncation_side=padding_side, use_fast=True,
+        truncation_side=padding_side, use_fast=True, fix_mistral_regex=True,
         trust_remote_code=model_args.trust_remote_code, cache_dir=model_cache_path)
     
     if model_tokenizer.pad_token is None:
@@ -77,7 +77,7 @@ def main():
     
     # Paths
     data_cache_path = "/root/autodl-tmp/dataset"
-    ds_path = "august66/drpo_hh_qwen2.5_1.5b_with_ref_prob_vllm_conv"
+    ds_path = "august66/hh_helpfulness_drpo_from_sft"
     config_path = "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/training_config/config_normal_dist.yaml"
     
     # Load training config
@@ -92,8 +92,8 @@ def main():
     
     # Load models
     print(f"[Rank {local_rank}] Loading models...")
-    ref_policy_model, ref_policy_tokenizer = load_model("/root/autodl-tmp/outputs/qwen_2.5_1.5b_hh_helpfulness_sft")
-    target_policy_model, _ = load_model("/root/autodl-tmp/outputs/qwen_2.5_1.5b_hh_helpfulness_sft")
+    ref_policy_model, ref_policy_tokenizer = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
+    target_policy_model, _ = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
     dpo_policy_model, _ = load_model('august66/hh_qwen_1.5b_dpo_model_2')
     print(f"[Rank {local_rank}] Models loaded")
     

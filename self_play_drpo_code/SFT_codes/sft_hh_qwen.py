@@ -2,10 +2,14 @@
 SFT training script for Qwen2.5-1.5B on HH-Helpful dataset.
 
 Usage:
+    # Single GPU
     python sft_hh_qwen.py
 
-Multi-GPU:
-    accelerate launch sft_hh_qwen.py
+    # Multi-GPU (e.g. 2 GPUs)
+    nohup accelerate launch --num_processes 1 sft_hh_qwen.py > training.log 2>&1
+
+    # Multi-GPU with config file
+    accelerate launch --config_file accelerate_config.yaml sft_hh_qwen.py
 """
 
 import torch
@@ -18,12 +22,13 @@ def main():
     # ── Config ──
     model_name = "Qwen/Qwen2.5-1.5B"
     dataset_name = "august66/hh_helpful_base"
-    output_dir = "./sft_qwen25_hh_helpful"
-    data_cache = "/Users/august/Documents/LLM Research/new_self_play_drpo/data_cache"
+    repo_id = "august66/qwen2.5-1.5b-base-hh-helpful-sft"
+    model_cache = '/root/autodl-tmp/model_cache'
+    data_cache = '/root/autodl-tmp/data_cache'
 
     # ── 1. Load & prepare dataset ──
     print("Loading dataset...")
-    ds_hh_helpful = load_dataset(dataset_name, cache_dir=data_cache, split="train")
+    ds_hh_helpful = load_dataset(dataset_name, split="train", cache_dir = data_cache)
 
     # Expand each row into two conversation rows (prompt+chosen, prompt+rejected)
     all_convos = []
@@ -37,12 +42,13 @@ def main():
 
     # ── 2. Load model & tokenizer ──
     print(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, cache_dir = model_cache)
+    # Do NOT set device_map="auto" — accelerate handles device placement for DDP
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16,
-        device_map="auto",
         trust_remote_code=True,
+        cache_dir = model_cache
     )
 
     if tokenizer.pad_token is None:
@@ -54,7 +60,7 @@ def main():
     # [{role, content}, ...] conversation into the model's chat format
     # (e.g. <|im_start|>user\n...<|im_end|> for Qwen2.5).
     training_args = SFTConfig(
-        output_dir=output_dir,
+        output_dir = "/root/autodl-tmp/output/sft_qwen25_hh_helpful",
         num_train_epochs=3,
         per_device_train_batch_size=4,
         gradient_accumulation_steps=4,
@@ -65,8 +71,10 @@ def main():
         logging_steps=50,
         save_strategy="epoch",
         save_total_limit=2,
-        max_seq_length=1024,
+        max_length=2048,
         report_to="none",
+        # Multi-GPU settings
+        ddp_find_unused_parameters=False,
     )
 
     # ── 4. Train ──
@@ -78,13 +86,15 @@ def main():
     )
 
     print(f"Training for {training_args.num_train_epochs} epochs")
-    print(f"Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
+    print(f"Per-device batch size: {training_args.per_device_train_batch_size}")
+    print(f"Gradient accumulation: {training_args.gradient_accumulation_steps}")
+    print(f"Effective batch size per GPU: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
     trainer.train()
 
     # ── 5. Save ──
-    trainer.save_model(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"Model saved to {output_dir}")
+    trainer.model.push_to_hub(repo_id)
+    trainer.tokenizer.push_to_hub(repo_id)
+    print(f"Model saved to {repo_id}")
 
 
 if __name__ == "__main__":
