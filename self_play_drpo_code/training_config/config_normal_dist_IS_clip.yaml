@@ -4,7 +4,7 @@ gradient_checkpointing: false
 model_and_preference_share_basemodel: false
 per_device_train_batch_size: 4
 gradient_accumulation_steps: 4
-learning_rate: 3.0e-6
+learning_rate: 1.0e-6
 max_new_tokens: 512
 max_length: 1024
 generate_temperature: 1.0
@@ -35,12 +35,14 @@ preference_model_kwargs:
   reverse: false
 ratio_processing: clip
 ratio_distribution: normal_distribution
-clipbound: 5.0
+clipbound: 20.0
 forward_temperature: 1.0
-max_grad_norm: 10.0
-scale: 6
+max_grad_norm: 20
+scale: 4
 dpo_beta: 0.1
 loss_type: 'IS'
 learn_mu_parameters: false
 mu_value_hidden_size: 64
 mu_value_coef: 1.0
+kl_coe_type: 'fixed'
+run_name: "IS_clip"

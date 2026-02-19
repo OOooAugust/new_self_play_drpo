@@ -78,7 +78,7 @@ def main():
     # Paths
     data_cache_path = "/root/autodl-tmp/dataset"
     ds_path = "august66/hh_helpfulness_drpo_from_sft"
-    config_path = "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/training_config/config_normal_dist.yaml"
+    config_path = "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/training_config/config_normal_dist_DRPO.yaml"
     
     # Load training config
     with open(config_path, "r") as f:
@@ -94,14 +94,15 @@ def main():
     print(f"[Rank {local_rank}] Loading models...")
     ref_policy_model, ref_policy_tokenizer = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
     target_policy_model, _ = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
-    dpo_policy_model, _ = load_model('august66/hh_qwen_1.5b_dpo_model_2')
+    dpo_policy_model, _ = load_model('august66/hh_qwen_1.5b_sft_dpo_model')
     print(f"[Rank {local_rank}] Models loaded")
     
     # Load preference pipeline
     print(f"[Rank {local_rank}] Loading preference pipeline...")
     preference_pipeline = BTwithRewardPipeline(
         training_args.preference_model_id, 
-        training_args.preference_model_id
+        training_args.preference_model_id,
+        use_chat_template = True
     )
     print(f"[Rank {local_rank}] Preference pipeline loaded")
     

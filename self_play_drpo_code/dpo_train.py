@@ -13,7 +13,7 @@ import re
 import yaml
 from datasets import load_dataset
 
-LOCAL_TRL_PARENT = "/workspace/Self_play_DRPO"
+LOCAL_TRL_PARENT = "/root/autodl-tmp/new_self_play_drpo"
 if LOCAL_TRL_PARENT not in sys.path:
     sys.path.insert(0, LOCAL_TRL_PARENT)
 
@@ -25,16 +25,15 @@ from trl import (
     ModelConfig
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
-from trl.data_utils import apply_chat_template as trl_apply
 
-data_cache_path = "/workspace/dataset"
-model_cache_path = '/workspace/model_cache'
-ds_path = 'august66/drpo_hh_qwen2.5_1.5b'
-ref_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
-target_policy_path = "Qwen/Qwen2.5-1.5B-Instruct" 
+data_cache_path = "/root/autodl-tmp/data_cache"
+model_cache_path = '/root/autodl-tmp/model_cache'
+ds_path = 'august66/hh_helpfulness_drpo_from_sft'
+ref_policy_path = "august66/qwen2.5-1.5b-base-hh-helpful-sft"
+target_policy_path = "august66/qwen2.5-1.5b-base-hh-helpful-sft"
 
 
-def load_model(model_path, task = 'generation', model_type = 'decoder', model_cache_path =  '/workspace/model_cache'):
+def load_model(model_path, task = 'generation', model_type = 'decoder', model_cache_path = '/root/autodl-tmp/model_cache'):
 
     model_args = ModelConfig(model_path)
     model_torch_dtype = (model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype))
@@ -86,25 +85,14 @@ def load_model(model_path, task = 'generation', model_type = 'decoder', model_ca
     return model_instance, model_tokenizer
 
 
-def render_prompt(history):
-    # Prefer tokenizer's own method if available
-    if hasattr(tok, "apply_chat_template"):
-        return tok.apply_chat_template(history, tokenize=False, add_generation_prompt=True)
-    return trl_apply(history, tok, add_generation_prompt=True)
-
-def as_assistant_text(x):
-    # your a1/a2 can be list[{"role":"assistant","content":...}] or plain string
-    return x[0]["content"] if isinstance(x, list) else x
-
 def to_three_cols(ex):
-    prompt_text = render_prompt(ex["prompt"])
-    a1 = as_assistant_text(ex["a1"])
-    a2 = as_assistant_text(ex["a2"])
-    if ex["rank"] == 1:   # adjust if your convention differs
-        chosen, rejected = a1, a2
+    # Keep data as conversational dicts — DPOTrainer's _prepare_dataset
+    # will call maybe_apply_chat_template to format them correctly.
+    if ex["rank"] == 1:   # rank=1 means a1 is preferred
+        chosen, rejected = ex["a1"], ex["a2"]
     else:
-        chosen, rejected = a2, a1
-    return {"prompt": prompt_text, "chosen": chosen, "rejected": rejected}
+        chosen, rejected = ex["a2"], ex["a1"]
+    return {"prompt": ex["prompt"], "chosen": chosen, "rejected": rejected}
 
 
 
@@ -113,8 +101,7 @@ if __name__ == "__main__":
     seed = 1234
     ref_policy_model, ref_policy_tokenizer = load_model(ref_policy_path)
     target_policy_model, target_policy_tokenizer = load_model(target_policy_path)
-    tok = target_policy_tokenizer
-    drpo_train = load_dataset("august66/drpo_hh_qwen2.5_1.5b", split="train")
+    drpo_train = load_dataset(ds_path, split="train", cache_dir=data_cache_path)
     drpo_train = drpo_train.map(to_three_cols, remove_columns=[c for c in drpo_train.column_names
                                            if c not in {"prompt","chosen","rejected"}])
     print ({
@@ -125,6 +112,8 @@ if __name__ == "__main__":
 
     config = DPOConfig(
         beta=0.1,
+        learning_rate=5e-7,
+        num_train_epochs=1,
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
         report_to="wandb",          
@@ -138,7 +127,7 @@ if __name__ == "__main__":
         save_steps = 10000,
         save_total_limit = 1,
         push_to_hub = True,
-        hub_model_id = 'august66/hh_qwen_1.5b_dpo_model_2',
+        hub_model_id = 'august66/hh_qwen_1.5b_sft_dpo_model',
         hub_strategy = 'every_save',
         bf16 = True,
         fp16 = False
