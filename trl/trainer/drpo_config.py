@@ -232,9 +232,15 @@ class DRPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to add eos token after the completion., choose False when your data applies chat template, choose True when your data is not and you want your generation contain the eos"},
     )
+
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model."},
+    )
+
+    kl_coe_type: str = field(
+        default = 'fixed',
+        metadata={"help": "If use adaptive KL beta or fixed KL beta "},
     )
 
 

@@ -92,8 +92,8 @@ def main():
     
     # Load models
     print(f"[Rank {local_rank}] Loading models...")
-    ref_policy_model, ref_policy_tokenizer = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
-    target_policy_model, _ = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
+    ref_policy_model, ref_policy_tokenizer = load_model("august66/hh_qwen1.5_IS_CLIP")
+    target_policy_model, _ = load_model("august66/hh_qwen1.5_IS_CLIP")
     dpo_policy_model, _ = load_model('august66/hh_qwen_1.5b_sft_dpo_model')
     print(f"[Rank {local_rank}] Models loaded")
     
@@ -120,6 +120,10 @@ def main():
         raise TypeError(f"Unexpected type from load_from_disk: {type(ds)}")
 
     drpo_train = drpo_train.shuffle(seed=1234)
+
+    NUM_EVAL_SAMPLES = 200
+    drpo_eval = drpo_train.select(range(NUM_EVAL_SAMPLES))
+    drpo_train = drpo_train.select(range(NUM_EVAL_SAMPLES, len(drpo_train)))
     
     if is_main:
         print(f"Starting training with {len(drpo_train)} samples")
@@ -139,6 +143,7 @@ def main():
         dpo_as_reward=True,
         preference_model=preference_pipeline,
         train_dataset=drpo_train,
+        eval_dataset=drpo_eval,
         processing_class=ref_policy_tokenizer,
         args=training_args
     )

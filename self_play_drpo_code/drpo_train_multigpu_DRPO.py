@@ -119,6 +119,10 @@ def main():
         raise TypeError(f"Unexpected type from load_from_disk: {type(ds)}")
 
     drpo_train = drpo_train.shuffle(seed=1234)
+
+    NUM_EVAL_SAMPLES = 200
+    drpo_eval = drpo_train.select(range(NUM_EVAL_SAMPLES))
+    drpo_train = drpo_train.select(range(NUM_EVAL_SAMPLES, len(drpo_train)))
     
     if is_main:
         print(f"Starting training with {len(drpo_train)} samples")
@@ -138,6 +142,7 @@ def main():
         dpo_as_reward=True,
         preference_model=preference_pipeline,
         train_dataset=drpo_train,
+        eval_dataset=drpo_eval,
         processing_class=ref_policy_tokenizer,
         args=training_args
     )

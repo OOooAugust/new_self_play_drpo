@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 """
-DRPO Training Script for Multi-GPU
-Run with: accelerate launch --num_processes=2 drpo_train_multigpu.py
+DM-only DRPO Training Script for Multi-GPU
+Run with: accelerate launch --num_processes=2 drpo_train_multigpu_DM.py
+
+This uses only the Direct Method (Eq 6) loss — no IS ratio, no DPO model needed.
 """
 
 import os
@@ -78,7 +80,7 @@ def main():
     # Paths
     data_cache_path = "/root/autodl-tmp/dataset"
     ds_path = "august66/hh_helpfulness_drpo_from_sft"
-    config_path = "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/training_config/config_normal_dist_IS_kl.yaml"
+    config_path = "/root/autodl-tmp/new_self_play_drpo/self_play_drpo_code/training_config/config_DM.yaml"
     
     # Load training config
     with open(config_path, "r") as f:
@@ -90,11 +92,10 @@ def main():
     
     training_args = DRPOConfig(**training_args_config)
     
-    # Load models
+    # Load models (DM-only: no DPO model needed)
     print(f"[Rank {local_rank}] Loading models...")
     ref_policy_model, ref_policy_tokenizer = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
     target_policy_model, _ = load_model("august66/qwen2.5-1.5b-base-hh-helpful-sft")
-    dpo_policy_model, _ = load_model('august66/hh_qwen_1.5b_sft_dpo_generation')
     print(f"[Rank {local_rank}] Models loaded")
     
     # Load preference pipeline
@@ -112,21 +113,18 @@ def main():
     # If you saved a DatasetDict, load_from_disk returns DatasetDict
     # If you saved a single Dataset, it returns Dataset
     if isinstance(ds, DatasetDict):
-        #drpo_train = process_split(concatenate_datasets(list(ds.values())))
-        drpo_train = concatenate_datasets(list(ds.values()))
+        drpo_train = process_split(concatenate_datasets(list(ds.values())))
     elif isinstance(ds, Dataset):
         drpo_train = ds
     else:
         raise TypeError(f"Unexpected type from load_from_disk: {type(ds)}")
 
     drpo_train = drpo_train.shuffle(seed=1234)
-    
 
     NUM_EVAL_SAMPLES = 200
     drpo_eval = drpo_train.select(range(NUM_EVAL_SAMPLES))
     drpo_train = drpo_train.select(range(NUM_EVAL_SAMPLES, len(drpo_train)))
-
-
+    
     if is_main:
         print(f"Starting training with {len(drpo_train)} samples")
         print(f"Logging steps: {training_args.logging_steps}")
@@ -141,8 +139,8 @@ def main():
     trainer = DRPOTrainerParallel(
         model=target_policy_model,
         ref_model=ref_policy_model,
-        dpo_model=dpo_policy_model,
-        dpo_as_reward=True,
+        dpo_model=None,
+        dpo_as_reward=False,
         preference_model=preference_pipeline,
         train_dataset=drpo_train,
         eval_dataset=drpo_eval,

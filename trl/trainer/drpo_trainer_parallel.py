@@ -135,9 +135,10 @@ class DRPOTrainerParallel(Trainer):
         ref_model: Union[PreTrainedModel, nn.Module],
         preference_model: Union[PreTrainedModel, nn.Module],
         args: DRPOConfig,
-        dpo_as_reward: False, 
+        dpo_as_reward: bool = False, 
         dpo_model: Union[PreTrainedModel, nn.Module, None] = None,
         train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
         data_collator: Optional[DataCollatorDRPO] = None, 
     ) -> None:
@@ -153,9 +154,12 @@ class DRPOTrainerParallel(Trainer):
 
         if dpo_as_reward and dpo_model is None: 
             raise ValueError('dpo model cannot be None if use dpo as reward')
+
         if dpo_as_reward: 
             self.dpo_model = dpo_model
             self.dpo_model.eval()
+        else:
+            self.dpo_model = None
 
         if data_collator is None:
             if processing_class is None:
@@ -166,6 +170,8 @@ class DRPOTrainerParallel(Trainer):
         self.processing_class = processing_class
 
         train_dataset = self._prepare_dataset(train_dataset, processing_class, args)
+        if eval_dataset is not None:
+            eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args)
         self.generation_config = GenerationConfig(
             max_new_tokens = args.max_new_tokens, 
             temperature = args.generate_temperature, 
@@ -181,6 +187,7 @@ class DRPOTrainerParallel(Trainer):
             args = args,
             data_collator = data_collator, 
             train_dataset = train_dataset,
+            eval_dataset = eval_dataset,
             processing_class = processing_class
         )
 
@@ -220,7 +227,9 @@ class DRPOTrainerParallel(Trainer):
         self.stats['objective/IS_loss'] = []
         self.stats['logps/a*'] = []
         self.stats['logps/a*_ref'] = []
-        self.stats['ps/a*'] = []
+        self.stats['ps/a*_vs_preferred'] = []  # P(a* > preferred answer), rank-conditioned
+        self.stats['ps/a*_vs_dispreferred'] = []  # P(a* > dispreferred answer), rank-conditioned
+        self.stats['ps/a*_vs_a1'] = []  # always P(a* > a1), regardless of rank
         self.stats["logps/a1"] = []
         self.stats['is_ratio'] = []
 
@@ -303,10 +312,253 @@ class DRPOTrainerParallel(Trainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
     
+    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+        if eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
 
+        data_collator = self.data_collator
+        dataloader_params = {
+            "batch_size": self.args.per_device_eval_batch_size,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+            "drop_last": False,
+            "shuffle": False,
+        }
+        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["worker_init_fn"] = seed_worker
 
+        return self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
 
+    @torch.no_grad()
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        """
+        Custom evaluation loop for DRPO. Mirrors training_step logic but without
+        gradient computation. Returns averaged metrics over the eval set.
+        """
+        model = self.model
+        model.eval()
 
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+
+        all_metrics = {
+            "loss": [],
+            "kl": [],
+            "direct_loss": [],
+            "IS_loss": [],
+            "logps_astar": [],
+            "logps_astar_ref": [],
+            "ps_astar": [],
+            "logps_a1": [],
+            "is_ratio": [],
+            "win_rate_vs_preferred": [],
+            "win_rate_vs_dispreferred": [],
+            "win_rate_overall": [],
+        }
+
+        num_batches = 0
+        for inputs in eval_dataloader:
+            prompt_ids = inputs['prompt_ids']
+            batch_size = prompt_ids.size(0)
+            prompt_attention_mask = inputs['prompt_attention_mask']
+            a1_ids = inputs['a1_ids']
+            a1_attention_mask = inputs['a1_attention_mask']
+            a2_ids = inputs['a2_ids']
+            a2_attention_mask = inputs['a2_attention_mask']
+            ref_ids = inputs['ref_ids']
+            ref_attention_mask = inputs['ref_attention_mask']
+            rank_input = inputs['rank'].float()
+
+            # Forward pass for a1
+            per_token_logps = self._forward(model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask)
+
+            # Generate a* and compute log probs
+            prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask = self._generate(
+                model, prompt_ids, prompt_attention_mask, self.args.num_astar
+            )
+            per_token_logps_star = self._forward(model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+
+            # Reference model forward
+            per_token_ref_logps_star = self._forward(self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask)
+            per_token_ref_logps_a1 = self._forward(self.ref_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask)
+
+            # Decode for preference scoring
+            prompt_astar_ids = torch.cat((prompt_ids_repeated, astar_ids), dim=1)
+            prompt_a1_ids = torch.cat((prompt_ids, a1_ids), dim=1)
+            prompt_a2_ids = torch.cat((prompt_ids, a2_ids), dim=1)
+
+            prompt_astar = self.processing_class.batch_decode(prompt_astar_ids, skip_special_tokens=True)
+            prompt_a1 = self.processing_class.batch_decode(prompt_a1_ids, skip_special_tokens=True)
+            prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
+
+            prompt_a2_repeated = [a2 for a2 in prompt_a2 for _ in range(self.args.num_astar)]
+            prompt_a1_repeated = [a1 for a1 in prompt_a1 for _ in range(self.args.num_astar)]
+
+            with torch.inference_mode():
+                preference_score_a2_star = get_preference_score(
+                    self.preference_model,
+                    prompt_astar,
+                    prompt_a2_repeated,
+                    is_bt_model=self.args.is_bt_model,
+                    noisy=0.0,
+                    kwargs=self.args.preference_model_kwargs or {}
+                )
+
+                if not self.args.loss_type == 'IS':
+                    preference_score_a1_a2 = get_preference_score(
+                        self.preference_model,
+                        prompt_a1,
+                        prompt_a2,
+                        is_bt_model=self.args.is_bt_model,
+                        noisy=0.0,
+                        kwargs=self.args.preference_model_kwargs or {}
+                    )
+                    if not isinstance(preference_score_a1_a2, torch.Tensor):
+                        preference_score_a1_a2 = torch.tensor(preference_score_a1_a2, device=prompt_ids.device)
+                    else:
+                        preference_score_a1_a2 = preference_score_a1_a2.to(prompt_ids.device)
+
+                if not isinstance(preference_score_a2_star, torch.Tensor):
+                    preference_score_a2_star = torch.tensor(preference_score_a2_star, device=prompt_ids.device)
+                else:
+                    preference_score_a2_star = preference_score_a2_star.to(prompt_ids.device)
+
+                # Win rate: a* vs a1
+                preference_score_a1_star = get_preference_score(
+                    self.preference_model,
+                    prompt_astar,
+                    prompt_a1_repeated,
+                    is_bt_model=self.args.is_bt_model,
+                    noisy=0.0,
+                    kwargs=self.args.preference_model_kwargs or {}
+                )
+                if not isinstance(preference_score_a1_star, torch.Tensor):
+                    preference_score_a1_star = torch.tensor(preference_score_a1_star, device=prompt_ids.device)
+                else:
+                    preference_score_a1_star = preference_score_a1_star.to(prompt_ids.device)
+
+            # Compute scalar metrics
+            logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
+            kl_div = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1) * astar_attention_mask).sum(-1)
+            mean_kl = kl_div.mean()
+
+            logps = (per_token_logps * a1_attention_mask).sum(-1)
+            ref_logps_a1 = (per_token_ref_logps_a1 * a1_attention_mask).sum(-1)
+            logps_astar_ref_scalar = (per_token_ref_logps_star * astar_attention_mask).sum(-1).mean()
+
+            # Compute IS ratio (skip entirely for DM-only)
+            if self.args.loss_type == 'DM':
+                ratio = torch.ones_like(logps)
+            elif self.args.ratio_processing == 'clip':
+                ratio = torch.exp((logps - ref_logps_a1))
+            elif self.args.ratio_processing == 'KL_divergence':
+                per_token_dpo_logps_a1 = self._forward(
+                    self.dpo_model, prompt_ids, prompt_attention_mask, a1_ids, a1_attention_mask
+                )
+                dpo_logps_a1 = (per_token_dpo_logps_a1 * a1_attention_mask).sum(-1)
+                reward = self.args.dpo_beta * (dpo_logps_a1 - ref_logps_a1)
+
+                kl_ref_theta_star = self._calculate_kl_divergence(
+                    self.ref_model, self.dpo_model, prompt_ids, prompt_attention_mask, ref_ids, ref_attention_mask
+                )
+                kl_theta_ref_star = self._calculate_kl_divergence(
+                    model, self.ref_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask
+                )
+                kl_theta_theta_star = self._calculate_kl_divergence(
+                    model, self.dpo_model, prompt_ids_repeated, prompt_attention_mask_repeated, astar_ids, astar_attention_mask
+                )
+                if self.args.num_astar > 1:
+                    kl_theta_ref = kl_theta_ref_star.view(batch_size, self.args.num_astar).mean(dim=1)
+                    kl_theta_theta = kl_theta_theta_star.view(batch_size, self.args.num_astar).mean(dim=1)
+                else:
+                    kl_theta_ref = kl_theta_ref_star
+                    kl_theta_theta = kl_theta_theta_star
+
+                mu_ref = -self.args.dpo_beta * kl_ref_theta_star
+                mu_theta = self.args.dpo_beta * (kl_theta_ref - kl_theta_theta)
+
+                if self.args.ratio_distribution == 'normal_distribution':
+                    ratio = torch.exp((-1 / (2 * self.args.scale ** 2)) * (-(reward - mu_ref) ** 2 + (reward - mu_theta) ** 2))
+                elif self.args.ratio_distribution == 'laplace_distribution':
+                    ratio = torch.exp((-1 / (2 * self.args.scale)) * (-torch.abs(reward - mu_theta) + torch.abs(reward - mu_ref)))
+                else:
+                    raise ValueError('ratio distribution not defined')
+
+            clipped_ratio = torch.clamp(ratio, min=1. / self.args.clipbound, max=self.args.clipbound)
+
+            # Compute losses (same logic as training_step)
+            preference_score_a1_a2_expanded = preference_score_a1_a2.repeat_interleave(self.args.num_astar) if not self.args.loss_type == 'IS' else None
+
+            if self.args.loss_type == 'DM':
+                # Eq 6: DM-only. Dataset is swapped so only g(a*, a1) suffices.
+                IS_loss = torch.tensor(0.0, device=logps.device)
+                direct_loss = -(preference_score_a1_star * logps_star).mean()
+                loss = direct_loss.mean()
+            elif self.args.loss_type == 'IS':
+                IS_loss = -clipped_ratio * (2 * rank_input - 1) * logps
+                direct_loss = torch.tensor(0.0, device=logps.device)
+                loss = IS_loss.mean()
+            else:
+                # DRPO: both IS correction + DM term (Eq 41)
+                IS_loss = -clipped_ratio * (rank_input - preference_score_a1_a2) * logps
+                direct_loss = -((preference_score_a2_star - preference_score_a1_a2_expanded) * logps_star).mean()
+                loss = direct_loss.mean() + IS_loss.mean()
+
+            loss += self.args.beta * mean_kl
+
+            # Gather and record metrics
+            all_metrics["loss"].append(self.accelerator.gather_for_metrics(loss.detach()).mean().item())
+            all_metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl.detach()).mean().item())
+            if self.args.loss_type != 'IS':
+                all_metrics["direct_loss"].append(self.accelerator.gather_for_metrics(direct_loss.mean().detach()).mean().item())
+            all_metrics["IS_loss"].append(self.accelerator.gather_for_metrics(IS_loss.mean().detach()).mean().item())
+            all_metrics["logps_astar"].append(self.accelerator.gather_for_metrics(logps_star.mean().detach()).mean().item())
+            all_metrics["logps_astar_ref"].append(self.accelerator.gather_for_metrics(logps_astar_ref_scalar.detach()).mean().item())
+            all_metrics["ps_astar"].append(self.accelerator.gather_for_metrics(preference_score_a2_star.mean().detach()).mean().item())
+            all_metrics["logps_a1"].append(self.accelerator.gather_for_metrics(logps.mean().detach()).mean().item())
+            all_metrics["is_ratio"].append(self.accelerator.gather_for_metrics(ratio.mean().detach()).mean().item())
+
+            # Win rates: use rank to determine preferred/dispreferred
+            # rank=1 → a1 preferred, rank=0 → a2 preferred
+            # preference_score_a1_star = P(a* > a1), preference_score_a2_star = P(a* > a2)
+            # These have shape [batch * num_astar], expand rank to match
+            rank_expanded = rank_input.repeat_interleave(self.args.num_astar)
+            win_score_vs_preferred = torch.where(rank_expanded == 1, preference_score_a1_star, preference_score_a2_star)
+            win_score_vs_dispreferred = torch.where(rank_expanded == 1, preference_score_a2_star, preference_score_a1_star)
+
+            wr_preferred = (win_score_vs_preferred > 0.5).float().mean()
+            wr_dispreferred = (win_score_vs_dispreferred > 0.5).float().mean()
+            # Overall: a* wins against both a1 and a2 pooled together
+            all_win_scores = torch.cat([preference_score_a1_star, preference_score_a2_star])
+            wr_overall = (all_win_scores > 0.5).float().mean()
+
+            all_metrics["win_rate_vs_preferred"].append(self.accelerator.gather_for_metrics(wr_preferred.detach()).mean().item())
+            all_metrics["win_rate_vs_dispreferred"].append(self.accelerator.gather_for_metrics(wr_dispreferred.detach()).mean().item())
+            all_metrics["win_rate_overall"].append(self.accelerator.gather_for_metrics(wr_overall.detach()).mean().item())
+
+            num_batches += 1
+
+            # Clean up
+            del per_token_logps, per_token_logps_star, per_token_ref_logps_star, per_token_ref_logps_a1
+            torch.cuda.empty_cache()
+
+        # Average all metrics
+        metrics = {}
+        for k, v in all_metrics.items():
+            if v:  # skip empty lists (e.g., direct_loss for IS-only)
+                metrics[f"{metric_key_prefix}/{k}"] = sum(v) / len(v)
+
+        metrics[f"{metric_key_prefix}/num_batches"] = num_batches
+
+        # Log directly to wandb to get a clean "eval/" section (not nested under "train/")
+        if self.accelerator.is_main_process and wandb.run is not None:
+            wandb.log(metrics, step=self.state.global_step)
+        self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, metrics)
+
+        model.train()
+        return metrics
 
 
     def _prepare_dataset(self,
@@ -355,21 +607,32 @@ class DRPOTrainerParallel(Trainer):
         prompt_attention_mask = prompt_attention_mask.repeat_interleave(num_astar, dim=0)
 
 
+        # Use both <|endoftext|> and <|im_end|> as stop tokens.
+        # SFT from base model only learns <|im_end|> as the turn-ending token,
+        # so without it, generation loops until max_new_tokens.
+        eos_token_id = self.processing_class.eos_token_id
+        im_end_id = self.processing_class.convert_tokens_to_ids("<|im_end|>")
+        if isinstance(eos_token_id, int):
+            eos_token_ids = list(set([eos_token_id, im_end_id]))
+        else:
+            eos_token_ids = list(set(list(eos_token_id) + [im_end_id]))
+
         with unwrap_model_for_generation(model, self.accelerator, gather_deepspeed3_params=False) as unwrapped_model:
             output = unwrapped_model.generate(
                 input_ids = prompt_ids, 
                 attention_mask = prompt_attention_mask, 
                 generation_config = self.generation_config,
                 pad_token_id = self.processing_class.pad_token_id,
-                eos_token_id = self.processing_class.eos_token_id,
+                eos_token_id = eos_token_ids,
                 synced_gpus = True if self.accelerator.num_processes > 1 else False,
             )
         
         completion_ids = output[:, prompt_ids.shape[1]:]
-        completion_ids, completion_attention_mask = truncate_right(completion_ids, self.processing_class.eos_token_id , self.processing_class.pad_token_id)
+        completion_ids, completion_attention_mask = truncate_right(completion_ids, eos_token_ids[0], self.processing_class.pad_token_id)
         
         return prompt_ids, prompt_attention_mask, completion_ids, completion_attention_mask
 
+        
     def _forward(
         self,
         model, 
@@ -498,21 +761,11 @@ class DRPOTrainerParallel(Trainer):
         prompt_a2 = self.processing_class.batch_decode(prompt_a2_ids, skip_special_tokens=True)
 
 
+
         prompt_a2_repeated = [a2 for a2 in prompt_a2 for _ in range(self.args.num_astar)]
-        #prompt_a1_repeated = [a1 for a1 in prompt_a1 for _ in range(self.args.num_astar)]
+        prompt_a1_repeated = [a1 for a1 in prompt_a1 for _ in range(self.args.num_astar)]
         
         with torch.inference_mode():
-            """
-            preference_score_a1_star = get_preference_score(
-                self.preference_model, 
-                prompt_astar, 
-                prompt_a1_repeated,
-                is_bt_model = self.args.is_bt_model,
-                noisy = 0.2,
-                kwargs=self.args.preference_model_kwargs or {}
-            )
-            """
-
             preference_score_a2_star = get_preference_score(
                 self.preference_model, 
                 prompt_astar, 
@@ -522,36 +775,57 @@ class DRPOTrainerParallel(Trainer):
                 kwargs=self.args.preference_model_kwargs or {}
             )
 
-            preference_score_a1_a2 = get_preference_score(
-                self.preference_model, 
-                prompt_a1, 
-                prompt_a2,
-                is_bt_model = self.args.is_bt_model,
-                noisy = 0.0,
-                kwargs = self.args.preference_model_kwargs or {}
+            preference_score_a1_star = get_preference_score(
+                self.preference_model,
+                prompt_astar,
+                prompt_a1_repeated,
+                is_bt_model=self.args.is_bt_model,
+                noisy=0.0,
+                kwargs=self.args.preference_model_kwargs or {}
             )
-            """
+
+            if not self.args.loss_type == 'IS':
+
+                preference_score_a1_a2 = get_preference_score(
+                    self.preference_model, 
+                    prompt_a1, 
+                    prompt_a2,
+                    is_bt_model = self.args.is_bt_model,
+                    noisy = 0.0,
+                    kwargs = self.args.preference_model_kwargs or {}
+                )
+
+                if not isinstance(preference_score_a1_a2, torch.Tensor):
+                    preference_score_a1_a2 = torch.tensor(preference_score_a1_a2, device=prompt_ids.device)
+                else:
+                    preference_score_a1_a2 = preference_score_a1_a2.to(prompt_ids.device)
+
             if not isinstance(preference_score_a1_star, torch.Tensor):
                 preference_score_a1_star = torch.tensor(preference_score_a1_star, device=prompt_ids.device)
             else:
                 preference_score_a1_star = preference_score_a1_star.to(prompt_ids.device)
-            """
             if not isinstance(preference_score_a2_star, torch.Tensor):
                 preference_score_a2_star = torch.tensor(preference_score_a2_star, device=prompt_ids.device)
             else:
                 preference_score_a2_star = preference_score_a2_star.to(prompt_ids.device)
 
 
-            if not isinstance(preference_score_a1_a2, torch.Tensor):
-                preference_score_a1_a2 = torch.tensor(preference_score_a1_a2, device=prompt_ids.device)
-            else:
-                preference_score_a1_a2 = preference_score_a1_a2.to(prompt_ids.device)
-
 
         logps_star = (per_token_logps_star * astar_attention_mask).sum(-1)
 
         kl_div = ((torch.exp(per_token_ref_logps_star - per_token_logps_star) - (per_token_ref_logps_star - per_token_logps_star) - 1)*astar_attention_mask).sum(-1)
         mean_kl = kl_div.mean()
+
+
+        if self.args.kl_coe_type == 'adaptive':
+            target_KL = 4.0 
+            # Only adjust beta once per optimizer step (not per micro-batch)
+            if (self.state.global_step + 1) % self.args.gradient_accumulation_steps == 0:
+                if mean_kl > 2.0 * target_KL:
+                    self.args.beta = min(self.args.beta * 2.0, 0.5)
+                elif mean_kl < target_KL / 2.0:
+                    self.args.beta = max(self.args.beta / 2.0, 0.05)
+
         logps = (per_token_logps * a1_attention_mask).sum(-1)
         ref_logps_a1 = (per_token_ref_logps_a1 * a1_attention_mask).sum(-1)
 
@@ -562,38 +836,25 @@ class DRPOTrainerParallel(Trainer):
 
         loss = 0
 
-        print ('prompt_a1:', prompt_a1)
-        print ('logp:', logps)
-
-        print ('prompt_astar:', prompt_astar)
-        print ('logp_star:', logps_star)
-
-
-        if self.args.ratio_processing == 'clip':
+        # Compute IS ratio (skip entirely for DM-only)
+        if self.args.loss_type == 'DM':
+            ratio = torch.ones_like(logps)
+        elif self.args.ratio_processing == 'clip':
             ratio = torch.exp((logps - ref_logps_a1))
         elif self.args.ratio_processing == 'KL_divergence':
 
             with torch.no_grad():
 
-                per_token_dpo_logps_star_a1 = self._forward(
+                per_token_dpo_logps_a1 = self._forward(
                     self.dpo_model, 
-                    prompt_ids_repeated, 
-                    prompt_attention_mask_repeated, 
+                    prompt_ids,
+                    prompt_attention_mask,
                     a1_ids, 
                     a1_attention_mask
                 )
 
-                per_token_dpo_logps_star_a2 = self._forward(
-                    self.dpo_model, 
-                    prompt_ids_repeated, 
-                    prompt_attention_mask_repeated, 
-                    a2_ids, 
-                    a2_attention_mask
-                )
-
-                dpo_logps_a1 = (per_token_dpo_logps_star_a1 * a1_attention_mask).sum(-1)
-                #dpo_logps_a2 = (per_token_dpo_logps_star_a2 * a2_attention_mask).sum(-1)
-                ref_logps_a1 = (per_token_ref_logps_a1 * a1_attention_mask).sum(-1)
+                dpo_logps_a1 = (per_token_dpo_logps_a1 * a1_attention_mask).sum(-1)
+                # ref_logps_a1 already computed before del block (line 574)
                 #ref_logps_a2 = (per_token_ref_logps_a2 * a2_attention_mask).sum(-1)
                 reward = self.args.dpo_beta * (dpo_logps_a1.detach() - ref_logps_a1.detach())
 
@@ -611,7 +872,7 @@ class DRPOTrainerParallel(Trainer):
                         prompt_ids, prompt_attention_mask,
                         ref_ids, ref_attention_mask)
 
-                    kl_theta_ref = self._calculate_kl_divergence(
+                    kl_theta_ref_star = self._calculate_kl_divergence(
                         model, self.ref_model,
                         prompt_ids_repeated, prompt_attention_mask_repeated,
                         astar_ids, astar_attention_mask)
@@ -621,8 +882,15 @@ class DRPOTrainerParallel(Trainer):
                         prompt_ids_repeated, prompt_attention_mask_repeated,
                         astar_ids, astar_attention_mask)
 
+                    if self.args.num_astar > 1:
+                        kl_theta_ref = kl_theta_ref_star.view(batch_size, self.args.num_astar).mean(dim=1)
+                        kl_theta_theta = kl_theta_theta_star.view(batch_size, self.args.num_astar).mean(dim=1)
+                    else:
+                        kl_theta_ref = kl_theta_ref_star
+                        kl_theta_theta = kl_theta_theta_star
+
                     mu_ref = -self.args.dpo_beta * kl_ref_theta_star
-                    mu_theta = self.args.dpo_beta * (kl_theta_ref - kl_theta_theta_star)
+                    mu_theta = self.args.dpo_beta * (kl_theta_ref - kl_theta_theta)
 
                 if self.args.ratio_distribution == 'normal_distribution':
                     ratio = torch.exp((-1/(2*self.args.scale*self.args.scale))*(-(reward - mu_ref)**2 + (reward - mu_theta)**2))
@@ -631,19 +899,28 @@ class DRPOTrainerParallel(Trainer):
                 else:
                     raise ValueError('ratio distribution not defined')
                 
-                del ref_ids, ref_attention_mask, per_token_dpo_logps_star_a1, per_token_dpo_logps_star_a2, dpo_logps_a1
+                del ref_ids, ref_attention_mask, per_token_dpo_logps_a1, dpo_logps_a1
 
         clipped_ratio = torch.clamp(ratio, min = 1. / self.args.clipbound, max = self.args.clipbound)
 
-        direct_loss = -((preference_score_a2_star.clone().detach() - preference_score_a1_a2.clone().detach()) * logps_star).mean()
 
-        IS_loss = -clipped_ratio.detach() * (rank_input - preference_score_a1_a2).detach() * logps
+
+        # Expand per-prompt tensors to match a* shape [batch * num_astar]
+        preference_score_a1_a2_expanded = preference_score_a1_a2.repeat_interleave(self.args.num_astar) if not self.args.loss_type == 'IS' else None
 
         if self.args.loss_type == 'DM':
+            # Eq 6: DM-only. Dataset is swapped so only g(a*, a1) suffices.
+            IS_loss = torch.tensor(0.0, device=logps.device)  # placeholder for logging
+            direct_loss = -(preference_score_a1_star.clone().detach() * logps_star).mean()
             loss += direct_loss.mean()
         elif self.args.loss_type == 'IS':
+            IS_loss = -clipped_ratio.detach() * rank_input.detach() * logps
+            direct_loss = torch.tensor(0.0, device=logps.device)  # placeholder for logging
             loss += IS_loss.mean()
         else:
+            # DRPO: both IS correction + DM term (Eq 41)
+            IS_loss = -clipped_ratio.detach() * (rank_input - preference_score_a1_a2).detach() * logps
+            direct_loss = -((preference_score_a2_star.clone().detach() - preference_score_a1_a2_expanded.clone().detach()) * logps_star).mean()
             loss += direct_loss.mean() + IS_loss.mean()
         
         loss  += self.args.beta * mean_kl
@@ -654,11 +931,27 @@ class DRPOTrainerParallel(Trainer):
         # Logging - compute scalars BEFORE gathering to avoid shape mismatch
         self.stats['beta'].append(self.args.beta)
         self.stats['objective/kl'].append(self.accelerator.gather_for_metrics(mean_kl.detach()).mean().item())
-        self.stats['objective/direct_loss'].append(self.accelerator.gather_for_metrics(direct_loss.mean().detach()).mean().item())
+        if self.args.loss_type != 'IS':
+            self.stats['objective/direct_loss'].append(self.accelerator.gather_for_metrics(direct_loss.mean().detach()).mean().item())
         self.stats['objective/IS_loss'].append(self.accelerator.gather_for_metrics(IS_loss.mean().detach()).mean().item())
         self.stats['logps/a*'].append(self.accelerator.gather_for_metrics(logps_star.mean().detach()).mean().item())
         self.stats['logps/a*_ref'].append(self.accelerator.gather_for_metrics(logps_astar_ref_scalar).mean().item())
-        self.stats['ps/a*'].append(self.accelerator.gather_for_metrics(preference_score_a2_star.mean().detach()).mean().item()) 
+
+
+        rank_expanded_for_log = rank_input.repeat_interleave(self.args.num_astar)
+        ps_vs_preferred = torch.where(
+            rank_expanded_for_log == 1,
+            preference_score_a1_star,
+            preference_score_a2_star,
+        )
+        ps_vs_dispreferred = torch.where(
+            rank_expanded_for_log == 1,
+            preference_score_a2_star,
+            preference_score_a1_star,
+        )
+        self.stats['ps/a*_vs_preferred'].append(self.accelerator.gather_for_metrics(ps_vs_preferred.mean().detach()).mean().item())
+        self.stats['ps/a*_vs_dispreferred'].append(self.accelerator.gather_for_metrics(ps_vs_dispreferred.mean().detach()).mean().item())
+        self.stats['ps/a*_vs_a1'].append(self.accelerator.gather_for_metrics(preference_score_a1_star.mean().detach()).mean().item())
         self.stats["logps/a1"].append(self.accelerator.gather_for_metrics(logps.mean().detach()).mean().item())
         self.stats['is_ratio'].append(self.accelerator.gather_for_metrics(ratio.mean().detach()).mean().item())
 

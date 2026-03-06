@@ -19,7 +19,7 @@ from .utils import selective_log_softmax
 
 
 def get_tokenizer(pretrain, model, padding_side="left", use_fast=True):
-    tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast)
+    tokenizer = AutoTokenizer.from_pretrained(pretrain, trust_remote_code=True, use_fast=use_fast, cache_dir = '/root/autodl-tmp/model_cache')
     tokenizer.padding_side = padding_side
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -311,20 +311,16 @@ class BTPipeline:
         return self 
 
 class BTwithRewardPipeline:
-    def __init__(self, reward_model_id, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=False, padding: bool=True):
+    def __init__(self, reward_model_id, model_name_or_path, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), truncation: bool=False, padding: bool=True, use_chat_template: bool=False):
         self.rm = AutoModelForSequenceClassification.from_pretrained(
             reward_model_id,
             torch_dtype=torch.bfloat16,
             device_map=device,
+            cache_dir = '/root/autodl-tmp/model_cache',
             #attn_implementation="flash_attention_2",
             num_labels=1,
         )
-        self.rm_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        # print("======================\n preference model config\n==============")
-        # print(self.rm.config)
-        # print(self.rm_tokenizer.all_special_tokens)
-        # print(self.rm_tokenizer.all_special_ids)
-        # print(self.rm_tokenizer.convert_ids_to_tokens(1000))
+        self.rm_tokenizer = AutoTokenizer.from_pretrained(reward_model_id, cache_dir = '/root/autodl-tmp/model_cache')
         
         # Ensure padding token is properly set for both tokenizer and model config
         if self.rm_tokenizer.pad_token is None:
@@ -336,19 +332,66 @@ class BTwithRewardPipeline:
         self.device = device
         self.truncation = truncation
         self.padding = padding
+        self.use_chat_template = use_chat_template
+
+    @staticmethod
+    def _parse_plain_text_to_messages(text: str) -> List[Dict[str, str]]:
+        """
+        Parse decoded plain text (from batch_decode with skip_special_tokens=True)
+        back into a list of chat messages.
+        
+        When Qwen's tokenizer decodes with skip_special_tokens=True, the output looks like:
+            system\nYou are a helpful assistant.\nuser\nHello\nassistant\nHi there
+        This method splits on role markers (system/user/assistant) that appear on their
+        own line and reconstructs the message list.
+        """
+        messages = []
+        # Split on role markers that appear at start-of-string or after a newline,
+        # followed by a newline. This captures the role name as a group.
+        parts = re.split(r'(?:^|\n)(system|user|assistant)\n', text.strip())
+        # parts layout: ['', role1, content1, role2, content2, ...]
+        i = 1  # skip the leading empty/whitespace part
+        while i < len(parts) - 1:
+            role = parts[i].strip()
+            content = parts[i + 1].strip()
+            if role in ('system', 'user', 'assistant'):
+                messages.append({"role": role, "content": content})
+            i += 2
+        # Fallback: if parsing fails, treat entire text as a single user message
+        if not messages:
+            messages = [{"role": "user", "content": text.strip()}]
+        return messages
 
     def __call__(self, input_text: List[str]):
         if isinstance(input_text, str):
             input_text = [input_text]
         
-        inputs = self.rm_tokenizer(
-            input_text,
-            padding=self.padding,
-            truncation=self.truncation,
-            return_tensors="pt",
-            add_special_tokens=True,
-            return_attention_mask=True
-        )
+        if self.use_chat_template and hasattr(self.rm_tokenizer, 'apply_chat_template'):
+            # Re-format decoded plain text with the reward model's chat template
+            formatted_texts = []
+            for text in input_text:
+                messages = self._parse_plain_text_to_messages(text)
+                formatted = self.rm_tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
+                formatted_texts.append(formatted)
+            inputs = self.rm_tokenizer(
+                formatted_texts,
+                padding=self.padding,
+                truncation=self.truncation,
+                return_tensors="pt",
+                add_special_tokens=False,  # chat template already includes special tokens
+                return_attention_mask=True
+            )
+        else:
+            inputs = self.rm_tokenizer(
+                input_text,
+                padding=self.padding,
+                truncation=self.truncation,
+                return_tensors="pt",
+                add_special_tokens=True,
+                return_attention_mask=True
+            )
 
         inputs = {k: v.to(self.device, non_blocking=True) for k, v in inputs.items()}
         
@@ -476,6 +519,7 @@ class BTRewardNetwork(nn.Module):
             revision=revision,
             torch_dtype=torch.bfloat16,
             device_map=device,
+            cache_dir = "/root/autodl-tmp/model_cache",
             # attn_implementation="flash_attention_2",
             num_labels=1,
         )
